@@ -1,5 +1,5 @@
 """
-Train sequence prediction model using extended vocabulary only. 
+Train sequence prediction model using extended vocabulary only. Update both new embeddings and model params
 No user_id added
 
 Sembolic sequence modeling setup
@@ -49,6 +49,8 @@ from torch.optim import AdamW
 import numpy as np
 import bagz
 from torch.utils.data import Subset
+from tqdm import tqdm
+from torch.utils.data import DataLoader, DistributedSampler
 
 
 BASE_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   # or your pretrained LLM
@@ -56,9 +58,9 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 OUTPUT_MODEL_DIR = config.MODEL_DIR / "train_seq_pred_extended_vocab"
 df_file = config.META_W_SID
 
-TRAIN_BATCH_SIZE = 8
+TRAIN_BATCH_SIZE = 4
 EPOCHS = 300    # training stablizes at epoch=120, batch_size=4, lr=1e-3, weight_decay=0.035
-LR = 5e-5
+LR = 1e-3
 WEIGHT_DECAY = 0.035
 
 run_name = f"sid_context_cp_lr{LR}_epoch{EPOCHS}_bs{TRAIN_BATCH_SIZE}"
@@ -116,15 +118,17 @@ class SeqDataset(Dataset):
         elif split == "test":
             self.data_reader = bagz.Reader(config.TEST_DATA)
 
+        # Convert all records in one shot
+        self.data = [json.loads(record.decode()) for record in self.data_reader]
+
         # self.max_len = 0
         # self.max_idx = 0
 
     def __len__(self):
-        return len(self.data_reader)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        record = self.data_reader[idx]
-        record = json.loads(record.decode())
+        record = self.data[idx]
 
         prompt = record["input_ids"]
         target = record["target_ids"]
@@ -173,12 +177,14 @@ class SeqGenDataset(Dataset):
         elif split == "test":
             self.data_reader = bagz.Reader(config.TEST_DATA)
 
+        # Convert all records in one shot
+        self.data = [json.loads(record.decode()) for record in self.data_reader]
+
     def __len__(self):
-        return len(self.data_reader)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        record = self.data_reader[idx]
-        record = json.loads(record.decode())
+        record = self.data[idx]
 
         prompt = record["input_ids"]
         target = record["target_ids"]
@@ -214,58 +220,95 @@ def sft_data_collator(batch, tokenizer):
 
 
 @torch.no_grad()
-def evaluate_sequence_recall(model, tokenizer, eval_dataset, num_beams=20, max_new_tokens=7):
+def evaluate_sequence_recall(
+    model,
+    tokenizer,
+    eval_loader,
+    num_beams=20,
+    max_new_tokens=7,
+    top_k_list=[1, 5, 10],
+    print_random_example=True,  # new flag
+):
     """
-    Compute sequence-level recall on the target for a dataset.
+    Batched sequence-level recall evaluation.
 
     Args:
-        model: Hugging Face model
+        model: Hugging Face causal LM
         tokenizer: Hugging Face tokenizer
-        eval_dataset: Iterable of dicts with 'prompt' and 'response' fields
-        num_beams: Number of beams for beam search
-        max_new_tokens: Maximum number of tokens to generate
+        eval_dataset: list of dicts with 'prompt' and 'target' fields
+        batch_size: number of prompts per batch
+        num_beams: number of beams for beam search
+        max_new_tokens: maximum tokens to generate
+        top_k_list: which recalls to compute (e.g., [1,5,10])
 
     Returns:
-        dict: {'recall_1': float, 'recall_5': float, 'recall_10': float}
+        dict: {'recall_1': float, 'recall_5': float, ...}
     """
     model.eval()
+    device = model.device
 
-    recall_1_list = []
-    recall_5_list = []
-    # recall_10_list = []
+    # Initialize recall lists
+    recalls_dict = {k: [] for k in top_k_list}
+    printed = False  # track if we've printed already
 
-    for sample in eval_dataset:
-        prompt_text = sample["prompt"]
-        target_text = sample["target"]
+    # Process dataset in batches
+    for batch in tqdm(eval_loader, desc="Evaluating"):
+        prompts = batch["prompt"]
+        targets = batch["target"]
 
-        # Encode input
-        inputs = tokenizer(prompt_text, return_tensors="pt").to(model.device)
+        # Tokenize batch
+        inputs = tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(device)
 
-        # Generate beams
+        batch_size = len(prompts)
+        max_k = max(top_k_list)
+
+        # Generate sequences for the batch
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, 1),
-            num_return_sequences=5,
-            do_sample=False, 
-            pad_token_id=tokenizer.eos_token_id,  # explicitly set pad token
+            num_beams=max(num_beams, max(top_k_list)),
+            num_return_sequences=max(top_k_list),
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
         )
 
-        # Decode generated sequences
-        decoded_outputs = [tokenizer.decode(o, skip_special_tokens=True) for o in outputs]
+        # Reshape outputs: (batch_size, num_return_sequences, seq_len)
+        batch_outputs = outputs.view(batch_size, max(top_k_list), -1)
 
-        # Check if target appears in top-k outputs
-        hits = [1 if target_text.strip() in o.strip() else 0 for o in decoded_outputs]
+        # Decode and compute top-k recall
+        for i in range(batch_size):
+            prompt_len = inputs["input_ids"].size(1)
+            decoded_outputs = [
+                tokenizer.decode(batch_outputs[i, k, prompt_len:], skip_special_tokens=True)
+                for k in range(max_k)
+            ]
+            # print(decoded_outputs)
 
-        recall_1_list.append(hits[0])
-        recall_5_list.append(int(any(hits[:5])))
-        # recall_10_list.append(int(any(hits[:10])))
+            hits = [1 if targets[i] in o else 0 for o in decoded_outputs]
+            for k in top_k_list:
+                recalls_dict[k].append(int(any(hits[:k])))
 
-    return {
-        "recall_1": float(np.mean(recall_1_list)),
-        "recall_5": float(np.mean(recall_5_list)),
-        # "recall_10": float(np.mean(recall_10_list))
-    }
+
+        # ---- Print one random batch example ----
+        if print_random_example and not printed:
+            rand_idx = random.randint(0, batch_size - 1)
+            print("\n=== Random Example ===")
+            print(f"Prompt:\n{prompts[rand_idx]}")
+            print(f"Target:\n{targets[rand_idx]}")
+            for k, gen in enumerate(decoded_outputs[:5]):  # show top 5 generations
+                print(f"[Gen {k+1}] {gen}")
+            print("========================\n")
+            printed = True
+        # ----------------------------------------
+
+    # Compute mean recall
+    recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
+    return recalls_mean
 
 
 
@@ -276,15 +319,47 @@ class GenerateEvalCallback(TrainerCallback):
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
+        self.batch_size = 8
 
     def on_evaluate(self, args, state, control, **kwargs):
         # Run every eval_steps
-        if state.global_step > 2000:
+        if state.global_step > 0 and state.global_step % self.eval_steps == 0:
+        # if state.global_step > 0:
+
+            # If running in DDP, shard the dataset using DistributedSampler
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                rank = torch.distributed.get_rank()
+                # print("Rank: ", rank)
+                sampler = DistributedSampler(self.eval_dataset, shuffle=False)
+            else:
+                rank = 0
+                sampler = None
+
+            # Create DataLoader
+            eval_loader = DataLoader(
+                self.eval_dataset,
+                batch_size=self.batch_size,
+                sampler=sampler,
+                shuffle=False,
+                collate_fn=None  # or custom collate_fn if needed
+            )
+
+            # Wrap DataLoader in tqdm ONLY for rank 0
+            if rank == 0:
+                eval_loader = tqdm(eval_loader, desc=f"Evaluating step {state.global_step}")
+
 
             # Run your custom generate-based eval
-            metrics = self.eval_fn(self.trainer.model, self.tokenizer, self.eval_dataset)
+            metrics = self.eval_fn(self.trainer.model, self.tokenizer, eval_loader)
 
-            # Prefix metrics with "eval_" for consistency with Hugging Face logs
+            # If DDP, reduce metrics across processes
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                for k in metrics:
+                    tensor = torch.tensor(metrics[k], device=self.trainer.model.device)
+                    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+                    metrics[k] = (tensor / torch.distributed.get_world_size()).item()
+
+            # Prefix metrics for consistency with Trainer logs
             metrics = {f"eval_{k}": v for k, v in metrics.items()}
             metrics["step"] = state.global_step
 
@@ -292,13 +367,14 @@ class GenerateEvalCallback(TrainerCallback):
             self.trainer.log(metrics)
 
             # Also print for visibility
-            print(f"\n[Custom generate eval @ step {state.global_step}] {metrics}")
+            if rank == 0:
+                print(f"\n[Custom generate eval @ step {state.global_step}] {metrics}")
 
         return control
 
 
 
-def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
+def train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eval_dataset):
     # --- Training arguments ---
     training_args = TrainingArguments(
         output_dir=OUTPUT_MODEL_DIR,
@@ -311,7 +387,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
         save_strategy="epoch",
         save_total_limit=1,
         eval_strategy="steps",
-        eval_steps=50,
+        eval_steps=500,
         # eval_strategy="no",
         optim="adamw_torch",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
@@ -333,6 +409,19 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
     # Wrap the base model with LoRA
     peft_model = get_peft_model(model, lora_config)
 
+    # Allow new embeddings to train
+    for param in peft_model.get_input_embeddings().parameters():
+        param.requires_grad = True
+
+    # ensures that only new vocabulary tokens get updated.
+    def zero_old_token_grads(grad):
+        grad[:old_vocab_size] = 0
+        return grad
+    
+    # Register the hook on the input embeddings
+    peft_model.get_input_embeddings().weight.register_hook(zero_old_token_grads)
+
+
     # --- Trainer ---
     trainer = Trainer(
         model=peft_model,
@@ -347,7 +436,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=50  # or whatever interval you want
+        eval_steps=500  # or whatever interval you want
     )
     trainer.add_callback(callback)
 
@@ -355,14 +444,39 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
 
 
 def main():
-    model, tokenizer, _ = load_model_tokenizer()
+    model, tokenizer, old_vocab_size = load_model_tokenizer(run_test=True)
 
     train_dataset = SeqDataset(tokenizer, "train")
     eval_dataset = SeqDataset(tokenizer, "eval")
     gen_eval_dataset = SeqGenDataset("eval")
 
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset)
+    train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eval_dataset)
     
+
+    # ------ Test beam search --------------
+    # model.to(DEVICE)
+    
+    # eval_loader = DataLoader(
+    #             gen_eval_dataset,
+    #             batch_size=8,
+    #             sampler=None,
+    #             shuffle=False,
+    #             collate_fn=None  # or custom collate_fn if needed
+    #         )
+    
+
+    # # Call the function
+    # metrics = evaluate_sequence_recall(
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     eval_loader=eval_loader,
+    #     num_beams=5,
+    #     max_new_tokens=10,
+    #     top_k_list=[1, 5]
+    # )
+
+    # print(metrics)
+    # -------------------------------
 
 
 if __name__ == "__main__":
