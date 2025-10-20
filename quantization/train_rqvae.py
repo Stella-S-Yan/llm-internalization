@@ -55,31 +55,13 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
     plt.show()
 
 
-def train(llama_emb=False):
+def train():
     os.makedirs(config.MODEL_DIR, exist_ok=True)
 
-    meta_df = bagz_utils.read_parquet(config.META_W_LLAMA_EMBEDDING)
+    meta_df = bagz_utils.read_parquet(config.META_W_EMBEDDING)
 
-    if llama_emb:
-        raw_item_embeddings = meta_df['llama_embedding'].tolist()
-        checkpoint_dir=config.RQVAE_CHECKPOINT_LLAMA_DIR
-        input_dim=2048
-        encoder_layer_dims=[1024, 512, 128]
-        decoder_layer_dims=[128, 512, 1024]
-        peak_lr=1e-3
-        end_lr=1e-5
-        commitment_cost=0.25
-    else:
-        raw_item_embeddings = meta_df['embedding'].tolist()
-        checkpoint_dir=config.RQVAE_CHECKPOINT_DIR
-        input_dim=768
-        encoder_layer_dims=[512, 256, 128]
-        decoder_layer_dims=[128, 256, 512]
-        peak_lr=1e-3
-        end_lr=1e-5
-        commitment_cost=0.35
-    
-
+    raw_item_embeddings = meta_df['embedding'].tolist()
+    checkpoint_dir=config.RQVAE_CHECKPOINT_DIR
 
     # Ensure all arrays are writable
     raw_item_embeddings = [np.array(emb, dtype=np.float32, copy=True) for emb in raw_item_embeddings]
@@ -103,8 +85,8 @@ def train(llama_emb=False):
         },
         "learning_rate_schedule": {
             "init_value": 0.0,
-            "peak_value": peak_lr,  # learning_rate
-            "end_value": end_lr,
+            "peak_value": 1e-3,  # learning_rate
+            "end_value": 5e-5,
         },
         "optimizer": {
             "type": "adamw",  # or "adagrad"
@@ -114,20 +96,21 @@ def train(llama_emb=False):
             "num_embeddings": 256,
             "embedding_dim": 16,
             "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": commitment_cost,     # increase to encourage codebook usage
+            "commitment_cost": 0.3,
             "data_variance": data_variance,
         }
     }
+
 
 
     # Initialize the model and optimizer
     rngs = nnx.Rngs(params=0, ema=1)
 
     model = rqvae.RQVAE(
-        input_dim=input_dim,
-        encoder_layer_dims=encoder_layer_dims,
+        input_dim=768,
+        encoder_layer_dims=[512, 256, 128],
         output_dim=hp["vqvae"]["embedding_dim"],
-        decoder_layer_dims=decoder_layer_dims,
+        decoder_layer_dims=[128, 256, 512],
         quantizers=[
             _layers.VectorQuantizerEMA(hp["vqvae"]["num_embeddings"], hp["vqvae"]["embedding_dim"], rngs, decay=hp["vqvae"]["ema_decay"]),
             _layers.VectorQuantizerEMA(hp["vqvae"]["num_embeddings"], hp["vqvae"]["embedding_dim"], rngs, decay=hp["vqvae"]["ema_decay"]),
@@ -191,6 +174,6 @@ def train(llama_emb=False):
     save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_loss, train_usage_ratios)
 
 if __name__=="__main__":
-    train(llama_emb=True)
+    train()
 
     

@@ -22,8 +22,10 @@ class GenFixedData():
         self.eval_data = []
         self.test_data = []
         self.tokenizer = tokenizer_utils.load_tokenizer()
-        self.max_encoder_seq_len = config.MAX_HISTORY_LEN * 4 + 1
-        self.max_decoder_seq_len = 1 * 4   
+        # self.max_encoder_seq_len = config.MAX_HISTORY_LEN * 4 + 1
+        # self.max_decoder_seq_len = 1 * 4   
+
+        self.max_len = 0
 
     def gen_data(self):
         records = bagz_utils.read_record(config.USER_UID_SID_SEQUENCE)
@@ -33,40 +35,43 @@ class GenFixedData():
 
         self._save_data()
 
+        print(self.max_len)
+
 
     def _process_one_record(self, record):
+        reviewerID = record["reviewerID"]
         uid = record["UID"]
         sid_seq = record["sid_seq"]
 
         # Test
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        inp_seq_d, tgt_seq_d = self._make_data_point(sid_seq, uid)
+        inp_seq_d = self._make_data_point(sid_seq, uid)
         self.test_data.append( {
+                # "reivewerID": reviewerID,
                 "input_ids": inp_seq_d,
-                "target_ids": tgt_seq_d,
                 }
         )
 
         # Eval
         sid_seq = record["sid_seq"][:-1]
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        inp_seq_d, tgt_seq_d = self._make_data_point(sid_seq, uid)
+        inp_seq_d = self._make_data_point(sid_seq, uid)
         self.eval_data.append( {
+                # "reivewerID": reviewerID,
                 "input_ids": inp_seq_d,
-                "target_ids": tgt_seq_d,
                 }
         )
 
         # Train
         sid_seq = record["sid_seq"][:-2]
         sub_seqs = self._get_subsequence(sid_seq)
-        sub_sequences = self._gen_train_data_point(sub_seqs, uid)
+        sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_data.extend(sub_sequences)
 
         # Train + eval
         sid_seq = record["sid_seq"][:-1]
         sub_seqs = self._get_subsequence(sid_seq)
-        sub_sequences = self._gen_train_data_point(sub_seqs, uid)
+        sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_eval_data.extend(sub_sequences)
 
         return
@@ -79,16 +84,17 @@ class GenFixedData():
         bagz_utils.save_record(self.test_data, config.TEST_DATA)
     
 
-    def _gen_train_data_point(self, sub_seqs, uid):
+    def _gen_train_data_point(self, sub_seqs, uid, reviewerID):
         res = []
         for seq in sub_seqs:
-            inp_seq_d, tgt_seq_d = self._make_data_point(seq, uid)
-            res.append(
-                {
-                    "input_ids": inp_seq_d, 
-                    "target_ids": tgt_seq_d, 
-                }
-            )
+            inp_seq_d = self._make_data_point(seq, uid)
+            if inp_seq_d is not None:
+                res.append(
+                    {   
+                        # "reivewerID": reviewerID,
+                        "input_ids": inp_seq_d, 
+                    }
+                )
         return res
 
 
@@ -102,22 +108,16 @@ class GenFixedData():
         return subsequences
 
 
-    def _make_data_point(self, seq, hashed_uid):
-        inp_seq = seq[:-1]
-        tgt_seq = seq[-1]
+    def _make_data_point(self, seq, uid):
 
-        inp_seq = [format_sid(seq) for seq in inp_seq]
-        tgt_seq = format_sid(tgt_seq)
-
-        inp_seq = [hashed_uid] + inp_seq
+        inp_seq = [format_sid(a_seq) for a_seq in seq]
+        inp_seq = [uid] + inp_seq
         inp_seq_str = ' '.join(
             item if isinstance(item, str) else ' '.join(item)
             for item in inp_seq
         )
-        tgt_seq_str = ' '.join(tgt_seq)
-        # inp_seq, tgt_seq = self._tokenize_pad_sequence(inp_seq_str, tgt_seq_str)
 
-        return inp_seq_str, tgt_seq_str
+        return inp_seq_str
 
 
 def generate_fixed_split_data():

@@ -15,10 +15,10 @@ def append_prefix_sid(seq):
     prefixes = ["A", "B", "C", "D"]
     return " ".join(f"{p}{n}" for p, n in zip(prefixes, seq))
 
-def gen_sid(llama_emb=False):
+def gen_sid():
 
     # Load filtered item embedding data
-    meta_df = bagz_utils.read_parquet(config.META_W_LLAMA_EMBEDDING)
+    meta_df = bagz_utils.read_parquet(config.META_W_EMBEDDING)
 
     raw_item_embeddings = meta_df['embedding'].tolist()
 
@@ -82,4 +82,4 @@ def gen_sid(llama_emb=False):
 
 
 if __name__=="__main__":
-    gen_sid(llama_emb=False)
+    gen_sid()
