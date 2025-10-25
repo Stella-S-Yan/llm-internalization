@@ -1,67 +1,37 @@
 """
-Train sequence prediction model using extended vocabulary only. Update both new embeddings and model params
-No user_id added
-
-Sembolic sequence modeling setup
-{
-  "input_ids": "UID_5626 A28 B191 C56 D0 A80 B84 C53 D0 A48 B141 C76 D0 A240 B194 C71 D0",
-  "target_ids": "A0 B140 C246 D0"
-}
-
-When to add semantic prompts?
-1. Plan to later use the mode in a language-driven context ("given a user's shopping history, describe what they might buy next")
-2. Want to leverage LLM's language prior to improve generalization when symbolic data is limited.
-
-Middle ground
-"User: UID_5626"
-"History: A28 B191 C56 D0 A80 B84 C53 D0"
-"Next: A0 B140 C246 D0"
-
-In SFT format: 
-{
-  "input": "User: UID_5626\nHistory: A28 B191 C56 D0 A80 B84 C53 D0 A48 B141 C76 D0 A240 B194 C71 D0\nNext:",
-  "output": "A0 B140 C246 D0"
-}
+Train sequence prediction model using extended vocabulary. Update both new embeddings and model params
+No user_id added. 
 
 DDP using all GPUs available.
 # Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_extended_vocab.py
+$ torchrun --nproc_per_node=8 train_extended_vocab.py
 """
 
 import json
 import random
-from utils import bagz_utils
 import config
 import torch
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+from peft import LoraConfig, get_peft_model, TaskType
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorWithPadding, DataCollatorForSeq2Seq, DataCollatorForLanguageModeling, default_data_collator
-from transformers.models.llama.modeling_llama import LlamaAttention
 from transformers import Trainer, get_cosine_schedule_with_warmup
 from torch.utils.data import Dataset, random_split
 from transformers import TrainerCallback
-from fine_tune import amazon_ori_template
-import pandas as pd
-import os
-from torch.optim import AdamW
 import numpy as np
 import bagz
-from torch.utils.data import Subset
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.optim.lr_scheduler import LambdaLR
-from transformers import TopKLogitsWarper, LogitsProcessorList
-import math
+from utils import bagz_utils
 
 
 BASE_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   # or your pretrained LLM
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_MODEL_DIR = config.MODEL_DIR / "train_seq_pred_extended_vocab"
+OUTPUT_MODEL_DIR = config.MODEL_DIR / "lepard_train_seq_pred"
 df_file = config.META_W_SID
 
-TRAIN_BATCH_SIZE = 16
+TRAIN_BATCH_SIZE = 256
 EPOCHS = 10    # training stablizes at epoch=120, batch_size=4, lr=1e-3, weight_decay=0.035
 LR = 5e-5
 WEIGHT_DECAY = 0.0
@@ -77,19 +47,9 @@ WARMUP_STEPS = 2_000    # 2k warmups is much better than 3K warmup
 DECAY_STEPS = 2_000     # 3k decay is worse -> needs quick decay
 MIN_LR_RATIO = 0.05     # 0.1 overfit, 0.08 overfit, 0.05 overfits very little, 0.03 will not learn well
 
-"""
-EMB_LR:
-0.08 too big, loss go up, even with 0.35 lora_dropout, 0.01 wd_body
-0.06, 0.04 all learn slowly, 0.02 seems the best
-
-BASE_LR:
-1e-4 too big, 1e-6 seems best
-
-"""
-
 
 run_name = f"full_emb_lr{EMB_LR}_base_lr{BASE_LR}_wd_emb{WD_EMB}_wd_body{WD_BODY}_bs{TRAIN_BATCH_SIZE}_warmup_{WARMUP_STEPS}_decay{DECAY_STEPS}_epoch{EPOCHS}_lora_rank{LORA_RANK}_lora_ratio{LORA_RATIO}_lora_dropout{LORA_DROPOUT}_min_lr_ratio{MIN_LR_RATIO}"
-LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_extended_vocab" / run_name
+LOGGING_DIR =  config.RUN_DIR / "lepard_train_seq_pred" / run_name
 
 
 def load_model_tokenizer(run_test=False):
@@ -135,39 +95,33 @@ def load_model_tokenizer(run_test=False):
 class SeqDataset(Dataset):
     def __init__(self, tokenizer, split):
         self.tokenizer = tokenizer
-        self.max_prompt_length=160
-        self.max_target_length=8
         if split == "train":
-            self.data_reader = bagz.Reader(config.TRAIN_DATA)
+            self.df = bagz_utils.read_parquet(config.LEPARD_W_SID_TRAIN)
         elif split == "eval":
-            self.data_reader = bagz.Reader(config.EVAL_DATA)
+            self.df = bagz_utils.read_parquet(config.LEPARD_W_SID_DEV)
         elif split == "test":
-            self.data_reader = bagz.Reader(config.TEST_DATA)
+            self.df = bagz_utils.read_parquet(config.LEPARD_W_SID_TEST)
 
-        # Convert all records in one shot
-        self.data = [json.loads(record.decode()) for record in self.data_reader]
-
-        # self.max_len = 0
-        # self.max_idx = 0
-
+        self.data = self.df[['formatted_dest_sid', 'formatted_source_sid']].values.tolist()
+        
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        record = self.data[idx]
 
-        sequence = record["input_ids"]
+        input = self.data[idx][0]
+        target = self.data[idx][1]
+
+        sequence = input + " " + target
 
         seq_enc = self.tokenizer(
             sequence,
             add_special_tokens=False,
             truncation=True,
-            max_length=self.max_prompt_length, 
+            max_length=16, 
             padding=False
         )
         
-
-        # --- Concatenate ---
         input_ids = seq_enc["input_ids"]
 
         # --- Labels ---
@@ -186,23 +140,18 @@ class SeqDataset(Dataset):
 class SeqGenDataset(Dataset):
     def __init__(self, split="eval"):
         if split == "eval":
-            self.data_reader = bagz.Reader(config.EVAL_DATA)
+            self.df = bagz_utils.read_parquet(config.LEPARD_W_SID_DEV)
         elif split == "test":
-            self.data_reader = bagz.Reader(config.TEST_DATA)
+            self.df = bagz_utils.read_parquet(config.LEPARD_W_SID_TEST)
 
-        # Convert all records in one shot
-        self.data = [json.loads(record.decode()) for record in self.data_reader]
+        self.data = self.df[['formatted_dest_sid', 'formatted_source_sid']].values.tolist()
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        record = self.data[idx]
-
-        sequence = record["input_ids"]
-        toks = sequence.split(" ")
-        prompt = " ".join(toks[:-4])
-        target = " ".join(toks[-4:])
+        prompt = self.data[idx][0]
+        target = self.data[idx][1]
 
         return {
             "prompt": prompt,
@@ -387,7 +336,7 @@ class GenerateEvalCallback(TrainerCallback):
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
-        self.batch_size = 8
+        self.batch_size = 512
 
     def on_evaluate(self, args, state, control, **kwargs):
         # Run every eval_steps
@@ -470,35 +419,35 @@ class TwoLRTrainer(Trainer):
         return self.optimizer
     
     
-    def create_scheduler(self, num_training_steps: int, optimizer=None):
-        """
-        Custom cosine learning rate schedule with warmup.
-        """
-        if self.lr_scheduler is None:
+    # def create_scheduler(self, num_training_steps: int, optimizer=None):
+    #     """
+    #     Custom cosine learning rate schedule with warmup.
+    #     """
+    #     if self.lr_scheduler is None:
 
-            print("~~~~ SCheduler: ")
-            # --- Custom scheduler hyperparams ---
+    #         print("~~~~ SCheduler: ")
+    #         # --- Custom scheduler hyperparams ---
 
-            # # Use the optimizer passed in (if provided) or self.optimizer
-            opt = optimizer or self.optimizer
+    #         # # Use the optimizer passed in (if provided) or self.optimizer
+    #         opt = optimizer or self.optimizer
 
-            # # --- Define the scheduler ---
-            # self.lr_scheduler = get_cosine_schedule_with_warmup(
-            #     opt,
-            #     num_warmup_steps=WARMUP_STEPS,
-            #     num_training_steps=num_training_steps,
-            #     num_cycles=0.5,  # single cosine cycle
-            # )
+    #         # # --- Define the scheduler ---
+    #         # self.lr_scheduler = get_cosine_schedule_with_warmup(
+    #         #     opt,
+    #         #     num_warmup_steps=WARMUP_STEPS,
+    #         #     num_training_steps=num_training_steps,
+    #         #     num_cycles=0.5,  # single cosine cycle
+    #         # )
 
-            # ~~~~ Scheduler: Warmup -> Decay -> Plateau 
-            self.lr_scheduler = get_warmup_decay_plateau_scheduler(
-                opt,
-                num_training_steps=num_training_steps,
-                warmup_steps=WARMUP_STEPS,
-                min_lr_ratio=MIN_LR_RATIO,  # adjust as needed
-                decay_steps=DECAY_STEPS,
-            )
-        return self.lr_scheduler
+    #         # ~~~~ Scheduler: Warmup -> Decay -> Plateau 
+    #         self.lr_scheduler = get_warmup_decay_plateau_scheduler(
+    #             opt,
+    #             num_training_steps=num_training_steps,
+    #             warmup_steps=WARMUP_STEPS,
+    #             min_lr_ratio=MIN_LR_RATIO,  # adjust as needed
+    #             decay_steps=DECAY_STEPS,
+    #         )
+    #     return self.lr_scheduler
 
     def log(self, logs, *args, **kwargs):
         # Inject custom learning rates before logging

@@ -39,6 +39,8 @@ USER2HASHED = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_use
 META_W_EMBEDDING = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_embedding_text_meta_df.bagz")
 META_W_SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid_embedding_text_meta_df.bagz")
 
+
+
 SID2ITEM = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid2item.bagz")
 ITEM2SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_item2sid.bagz")
 
@@ -55,3 +57,16 @@ MAX_HISTORY_LEN = 20
 MIN_HISTORY_LEN = 2
 MAX_DEC_LEN = 1
 PAD_TOKEN = 0
+
+
+
+LEPARD_W_EMBEDDING_TRAIN = os.path.join(PROCESSED_DATA_DIR, f"lepard_embedding_df_train.bagz")
+LEPARD_W_EMBEDDING_DEV = os.path.join(PROCESSED_DATA_DIR, f"lepard_embedding_df_dev.bagz")
+LEPARD_W_EMBEDDING_TEST = os.path.join(PROCESSED_DATA_DIR, f"lepard_embedding_df_test.bagz")
+
+LEPARD_W_SID_TRAIN = os.path.join(PROCESSED_DATA_DIR, f"lepard_sid_df_train.bagz")
+LEPARD_W_SID_DEV = os.path.join(PROCESSED_DATA_DIR, f"lepard_sid_df_dev.bagz")
+LEPARD_W_SID_TEST = os.path.join(PROCESSED_DATA_DIR, f"lepard_sid_df_test.bagz")
+
+LEPARD_RQVAE_CHECKPOINT_DIR= os.path.join(MODEL_DIR, f"lepard_rqvae")
+LEPARD_TRAIN_LOSS_PLOT = os.path.join(MODEL_DIR, f"lepard_rqvae_train.png")
