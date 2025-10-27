@@ -27,8 +27,9 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B"  #"meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / "lepard_sid_aligned_model"
-LOG_DIR = config.RUN_DIR / "lepard_sid_alignment"
+MODEL_LOAD_DIR = config.MODEL_DIR / "lepard_sid_aligned_model"
+MODEL_SAVE_DIR = config.MODEL_DIR / "continue_lepard_sid_aligned_model"
+LOG_DIR = config.RUN_DIR / "continue_lepard_sid_alignment"
 BATCH_SIZE = 1024
 EPOCHS = 20_000     # plateau at epoch 2k
 LR = 5e-4
@@ -275,8 +276,34 @@ def save_model(model, tokenizer, optimizer, epoch=None, global_step=None):
     }, os.path.join(save_dir, "training_state.pt"))
 
 
+def load_checkpoint():
+    model = AutoModelForCausalLM.from_pretrained(MODEL_LOAD_DIR)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_LOAD_DIR)
+    
+    # Load optimizer state
+    checkpoint_path = os.path.join(MODEL_LOAD_DIR, "training_state.pt")
+    checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
 
-def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
+    optimizer = torch.optim.Adam(
+        [model.get_input_embeddings().weight],  # or whichever params you train
+        lr=1e-4
+    )
+
+    optimizer.load_state_dict(checkpoint["optimizer"])
+
+    # 🧠 Move optimizer state tensors to the correct device
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.to(DEVICE)
+
+    epoch = checkpoint.get("epoch", 0)
+    global_step = checkpoint.get("global_step", 0)
+
+    return model.to(DEVICE), tokenizer, optimizer, epoch, global_step
+
+
+def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer, optimizer):
     model.train()
 
     # Freeze all model parameters
@@ -286,8 +313,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     # Use grad masking to only update new embeddings
     emb = model.get_input_embeddings()
     emb.weight.requires_grad = True
-
-    optimizer = torch.optim.Adam([emb.weight], lr=LR)
 
     model.to(DEVICE)
     
@@ -384,12 +409,13 @@ def main():
     
     writer = SummaryWriter(log_dir=f"{LOG_DIR}/{RUN_NAME}")
 
-    model, tokenizer, old_vocab_size = load_model_tokenizer(run_test=True)
+    model, tokenizer, optimizer, epoch, global_step = load_checkpoint()
+    old_vocab_size = 128_256
 
     dataset = get_data()
     
     # Train
-    train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer)
+    train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer, optimizer)
 
     # Save fine tuned model
     model.save_pretrained(MODEL_SAVE_DIR)

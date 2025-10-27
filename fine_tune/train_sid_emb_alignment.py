@@ -16,7 +16,7 @@ import random
 import os
 
 
-MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
+MODEL_NAME = "meta-llama/Llama-3.2-1B"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / "sid_aligned_model"
 LOG_DIR = config.RUN_DIR / "sid_alignment"
