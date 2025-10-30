@@ -17,6 +17,8 @@ def load_rqvae(checkpoint_dir=None):
     restored = load_checkpoint(checkpoint_dir=checkpoint_dir)
 
     hp = restored["metadata"]
+
+
     rngs = nnx.Rngs(params=0, ema=1)
 
     abstract_model = RQVAE(

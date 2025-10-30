@@ -1,6 +1,6 @@
 
 
-from prepare_data import download_amazon_data, preprocess_amazon_data, gen_sid, gen_embedding_sbert, add_seq_user_data, fixed_grain_dataset
+from prepare_data import download_amazon_data, preprocess_amazon_data, gen_sid, gen_embedding_sbert, add_seq_user_data, fixed_grain_dataset, gen_embedding_llama
 from quantization import train_rqvae
 
 def run_pipeline():
@@ -14,6 +14,8 @@ def run_pipeline():
     train_rqvae.train()
     # Create sid
     gen_sid.gen_sid()
+    # Gen llama embedding
+    gen_embedding_llama.gen_embedding()
     # Add User id
     add_seq_user_data.main()
     # Make the dataset

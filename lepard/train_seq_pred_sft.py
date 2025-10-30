@@ -31,7 +31,7 @@ EPOCHS = 100    # training stablizes at epoch=120, batch_size=4, lr=1e-3, weight
 LR = 1e-3
 WEIGHT_DECAY = 0.0
 LORA_RANK = 8
-LORA_RATIO = 2
+LORA_RATIO = 1
 LORA_DROPOUT = 0.1
 
 
@@ -390,8 +390,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
 
 
 def main():
-    model, tokenizer, optimizer, epoch, global_step = load_checkpoint()
-    print(epoch, global_step)
+    model, tokenizer, _, _, _ = load_checkpoint()
 
     train_dataset = SeqDataset(tokenizer, "train")
     eval_dataset = SeqDataset(tokenizer, "eval")

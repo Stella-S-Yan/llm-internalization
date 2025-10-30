@@ -26,7 +26,14 @@ def load_checkpoint(checkpoint_dir):
 
     mngr = ocp.Checkpointer(ocp.CompositeCheckpointHandler())
     path = os.path.join(checkpoint_dir, load_step)
-    restored = mngr.restore(path)
+    # restored = mngr.restore(path)
+    restored = mngr.restore(
+        path,
+        args=ocp.args.Composite(
+            state=ocp.args.PyTreeRestore(),  # state will be loaded as a pytree
+            metadata=ocp.args.JsonRestore()            # tell Orbax how to load metadata
+        )
+    )
     return restored
 
 
