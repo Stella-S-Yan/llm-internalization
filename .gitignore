@@ -18,6 +18,9 @@ rl_data/
 # log
 logs/
 
+# notebook
+*.ipynb
+
 # Distribution / packaging
 .Python
 build/

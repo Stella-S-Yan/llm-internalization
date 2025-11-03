@@ -2,11 +2,8 @@
 Pregenerate all possible subsequences and create a fixed training dataset
 """
 
-import numpy as np
 import config
-import hashlib
 from utils import bagz_utils
-from utils import tokenizer_utils
 
 
 
@@ -21,14 +18,13 @@ class GenFixedData():
         self.train_data = []
         self.eval_data = []
         self.test_data = []
-        self.tokenizer = tokenizer_utils.load_tokenizer()
         # self.max_encoder_seq_len = config.MAX_HISTORY_LEN * 4 + 1
         # self.max_decoder_seq_len = 1 * 4   
 
         self.max_len = 0
 
     def gen_data(self):
-        records = bagz_utils.read_record(config.USER_UID_SID_SEQUENCE)
+        records = bagz_utils.read_record(config.USER_SEQUENCE)
         
         for record in records:
             self._process_one_record(record)
@@ -39,37 +35,39 @@ class GenFixedData():
 
 
     def _process_one_record(self, record):
+        uid = record["id"]
         reviewerID = record["reviewerID"]
-        uid = record["UID"]
-        sid_seq = record["sid_seq"]
+        sid_seq = record["sequence"]
 
         # Test
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        inp_seq_d = self._make_data_point(sid_seq, uid)
+        inp_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.test_data.append( {
-                # "reivewerID": reviewerID,
-                "input_ids": inp_seq_d,
+                "uid": uid,
+                "input": inp_seq_d,
+                "target": target_seq_d
                 }
         )
 
         # Eval
-        sid_seq = record["sid_seq"][:-1]
+        sid_seq = record["sequence"][:-1]
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        inp_seq_d = self._make_data_point(sid_seq, uid)
+        inp_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.eval_data.append( {
-                # "reivewerID": reviewerID,
-                "input_ids": inp_seq_d,
+                "uid": uid,
+                "input": inp_seq_d,
+                "target": target_seq_d
                 }
         )
 
         # Train
-        sid_seq = record["sid_seq"][:-2]
+        sid_seq = record["sequence"][:-2]
         sub_seqs = self._get_subsequence(sid_seq)
         sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_data.extend(sub_sequences)
 
         # Train + eval
-        sid_seq = record["sid_seq"][:-1]
+        sid_seq = record["sequence"][:-1]
         sub_seqs = self._get_subsequence(sid_seq)
         sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_eval_data.extend(sub_sequences)
@@ -85,14 +83,16 @@ class GenFixedData():
     
 
     def _gen_train_data_point(self, sub_seqs, uid, reviewerID):
+        del reviewerID
         res = []
         for seq in sub_seqs:
-            inp_seq_d = self._make_data_point(seq, uid)
+            inp_seq_d, target_seq_d = self._make_data_point(seq)
             if inp_seq_d is not None:
                 res.append(
                     {   
-                        # "reivewerID": reviewerID,
-                        "input_ids": inp_seq_d, 
+                        "uid": uid,
+                        "input": inp_seq_d, 
+                        "target": target_seq_d
                     }
                 )
         return res
@@ -108,16 +108,16 @@ class GenFixedData():
         return subsequences
 
 
-    def _make_data_point(self, seq, uid):
+    def _make_data_point(self, seq):
+        target = seq[-1]
+        input = seq[:-1]
 
-        inp_seq = [format_sid(a_seq) for a_seq in seq]
-        inp_seq = [uid] + inp_seq
-        inp_seq_str = ' '.join(
+        inp_seq_str = '; '.join(
             item if isinstance(item, str) else ' '.join(item)
-            for item in inp_seq
+            for item in input
         )
 
-        return inp_seq_str
+        return inp_seq_str, target
 
 
 def generate_fixed_split_data():

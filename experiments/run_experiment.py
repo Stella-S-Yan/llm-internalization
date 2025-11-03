@@ -1,7 +1,8 @@
 
 
-from prepare_data import download_amazon_data, preprocess_amazon_data, gen_sid, gen_embedding_sbert, add_seq_user_data, fixed_grain_dataset, gen_embedding_llama
+from prepare_data import download_amazon_data, preprocess_amazon_data, gen_sid, gen_embedding_sbert, add_seq_user_data, gen_embedding_llama
 from quantization import train_rqvae
+from use_all_data import fixed_grain_dataset
 
 def run_pipeline():
     # Download data
