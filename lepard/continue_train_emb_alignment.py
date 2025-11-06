@@ -137,7 +137,9 @@ class SIDRetrievalEvaluator:
             padding=True,
             truncation=True,
             max_length=8
-        ).to(self.device)
+        )
+
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
             outputs = self.model(input_ids=inputs["input_ids"],
@@ -152,37 +154,6 @@ class SIDRetrievalEvaluator:
 
         return embeddings
     
-
-    def compute_ndcg(topk_inds, k=None):
-        """
-        Compute NDCG@k for a batch of queries.
-
-        Args:
-            topk_inds: [B, maxK] tensor of top-K indices (0 = positive)
-            k: int or None. If int, compute NDCG@k. If None, use full topk_inds.shape[1]
-        Returns:
-            ndcg: float, average NDCG over batch
-        """
-        B, maxK = topk_inds.shape
-        if k is None:
-            k = maxK
-        k = min(k, maxK)
-
-        # relevance vector: 1 if positive (index 0), 0 else
-        relevance = (topk_inds[:, :k] == 0).float()  # [B, k]
-
-        # compute discounts: log2(rank + 1)
-        discounts = torch.log2(torch.arange(2, k + 2, device=topk_inds.device).float())  # [k]
-
-        # DCG for each query
-        dcg = (relevance / discounts).sum(dim=1)  # [B]
-
-        # IDCG for each query (ideal DCG, positive at rank 1)
-        idcg = torch.tensor([1.0], device=topk_inds.device)  # always 1 since only 1 positive
-        ndcg = (dcg / idcg).mean().item()  # average over batch
-
-        return ndcg
-
 
     def evaluate(self, topk=(1, 5, 10), num_negatives=99, sample_size=1000, batch_size=64):
         """

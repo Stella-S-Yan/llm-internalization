@@ -74,11 +74,7 @@ def load_model_tokenizer(run_test: False):
 
 class SIDDataset(Dataset):
     def __init__(self):
-        self.df = bagz_utils.read_parquet(config.META_W_ALL_SID)
-
-        self.data = []
-        tmp = self.df[["llama_embedding", "formatted_sid"]].values.tolist()
-        self.data.extend(tmp)
+        self.data = bagz_utils.read_parquet(config.META_W_ALL_SID.value)[["llama_embedding", "formatted_sid"]].values.tolist()
 
     def __len__(self):
         return len(self.data)

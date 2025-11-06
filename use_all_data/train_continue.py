@@ -14,7 +14,7 @@ import json
 import random
 import config
 import torch
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from transformers import TrainerCallback
@@ -23,25 +23,26 @@ import bagz
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
 import argparse
-from torch.utils.data import Subset
+import os
+from peft import PeftModel
 
-
-MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
+BASE_MODEL_DIR = config.MODEL_DIR / "all_sid_aligned_model"
+ADAPTOR_DIR = config.MODEL_DIR / f"train_seq_pred_aligned_phase1"  #config.MODEL_DIR / "all_sid_aligned_model"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / f"train_seq_pred_aligned_phase1"
 
 
+TRAIN_BATCH_SIZE = 16
+LR = 4e-4
+WEIGHT_DECAY = 1e-3
+TOTAL_STEPS = 16_000    # 13_000
 
-class Params:
-    TRAIN_BATCH_SIZE = 16
-    LR = 4e-4
-    WEIGHT_DECAY = 1e-3
-    TOTAL_STEPS = 16_000    # 13_000
+LORA_DROPOUT = 0.1     # turn to 0.3 leads to overfit, weirdly. 0.01 also overfits, 0.05 seems best
+LORA_RANK = 16      # 16 large rank overfit early
+LORA_RATIO = 1
+WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
 
-    LORA_DROPOUT = 0.1     # turn to 0.3 leads to overfit, weirdly. 0.01 also overfits, 0.05 seems best
-    LORA_RANK = 16      # 16 large rank overfit early
-    LORA_RATIO = 1
-    WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
+
 
 
 TEMPLATE = """Rule:
@@ -58,11 +59,16 @@ TEMPLATE = """Rule:
             {next}
         """
 
-def load_model_tokenizer():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_INPUT_DIR)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_INPUT_DIR)
+def load_checkpoint():
+    # Load base model
+    model = AutoModelForCausalLM.from_pretrained(BASE_MODEL_DIR)
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_DIR)
+    
+    # Load adaptor
+    peft_model = PeftModel.from_pretrained(model, f"{ADAPTOR_DIR}/best_checkpoint")
 
-    return model, tokenizer
+    print(peft_model)
+    return peft_model.to(DEVICE), tokenizer
 
 
 class SeqDataset(Dataset):
@@ -271,7 +277,7 @@ class GenerateEvalCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
 
         # dynamically adjust evaluation frequency
-        if 8000 <= state.global_step:
+        if 8000 <= state.global_step <= 15000:
             eval_interval = 1000
         else:
             eval_interval = self.eval_steps
@@ -288,11 +294,9 @@ class GenerateEvalCallback(TrainerCallback):
                 rank = 0
                 sampler = None
 
-            # Create 
-            # small_dataset = Subset(self.eval_dataset, range(10))
+            # Create DataLoader
             eval_loader = DataLoader(
                 self.eval_dataset,
-                # small_dataset,
                 batch_size=self.batch_size,
                 sampler=sampler,
                 shuffle=False,
@@ -332,31 +336,25 @@ class GenerateEvalCallback(TrainerCallback):
                     print(f"New best metric {current_metric:.4f}! Saving model...")
                     output_dir = f"{args.output_dir}/best_checkpoint"
                     self.trainer.save_model(output_dir)
-                    self.trainer.save_state()
 
         return control
 
 
-def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
-    print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
-    print(vars(Params))
-
+def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset):
     # --- Training arguments ---
     training_args = TrainingArguments(
         output_dir=MODEL_SAVE_DIR,
-        logging_dir=params.LOGGING_DIR,
-        per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
+        logging_dir=LOGGING_DIR,
+        per_device_train_batch_size=TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=1,
         # num_train_epochs=EPOCHS,
-        max_steps=params.TOTAL_STEPS,
-        learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
-        weight_decay=params.WEIGHT_DECAY,
-        warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
+        max_steps=TOTAL_STEPS,
+        learning_rate=LR,   # base LR passed to Trainer, overridden by our custom groups
+        weight_decay=WEIGHT_DECAY,
+        warmup_steps=WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",  # can also try "cosine", "linear"
         logging_steps=50,
-        # save_strategy="steps",
-        # save_steps=1000,
-        save_strategy="no",
+        save_strategy="epoch",
         save_total_limit=1,
         eval_strategy="steps",
         eval_steps=500,
@@ -372,11 +370,11 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     
     # Define LoRA config
     lora_config = LoraConfig(
-        r=params.LORA_RANK,                      # rank
-        lora_alpha=params.LORA_RANK * params.LORA_RATIO,
+        r=LORA_RANK,                      # rank
+        lora_alpha=LORA_RANK * LORA_RATIO,
         # target_modules=["q_proj", "v_proj"],  # attention projections
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=params.LORA_DROPOUT,
+        lora_dropout=LORA_DROPOUT,
         bias="none",
         task_type=TaskType.CAUSAL_LM
     )
@@ -411,6 +409,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
 
 
 def main():
+    global LR, WARMUP_STEPS, TRAIN_BATCH_SIZE, LORA_RATIO, LOGGING_DIR
+
     parser = argparse.ArgumentParser(description="Training configuration")
 
     parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
@@ -418,29 +418,29 @@ def main():
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
     parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
-    parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
-    parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
 
     args = parser.parse_args()
 
-    for key, value in vars(args).items():
-        setattr(Params, key, value)
+    # Assign to global config
+    LR = args.LR
+    WARMUP_STEPS = args.WARMUP_STEPS
+    TRAIN_BATCH_SIZE = args.TRAIN_BATCH_SIZE
+    LORA_RATIO = args.LORA_RATIO
+    TOTAL_STEPS = args.TOTAL_STEPS
+    run_name = f"lr{LR}_bs{TRAIN_BATCH_SIZE}_warmup_{WARMUP_STEPS}_lora_ratio{LORA_RATIO}_weight_decay{WEIGHT_DECAY}_total_steps{TOTAL_STEPS}"
+    LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
+    load_checkpoint()
 
-    print(f"!!! total_steps: {Params.TOTAL_STEPS}")
-    print(vars(Params))
-
-    model, tokenizer = load_model_tokenizer()
-    old_vocab_size = 128_256
+    # model, tokenizer = load_model_tokenizer()
+    # old_vocab_size = 128_256
     
-    train_dataset = SeqDataset(tokenizer, "train")
-    eval_dataset = SeqDataset(tokenizer, "eval")
+    # train_dataset = SeqDataset(tokenizer, "train")
+    # eval_dataset = SeqDataset(tokenizer, "eval")
 
-    gen_eval_dataset = SeqGenDataset("eval")
+    # gen_eval_dataset = SeqGenDataset("eval")
 
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
+    # train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset)
     
 
 if __name__ == "__main__":
