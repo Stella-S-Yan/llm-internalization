@@ -1,86 +1,51 @@
 """
-Train sequence prediction model using extended vocabulary. Update both new embeddings and model params
-No user_id added. 
+Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
 
-Extend training data with subsequences. 
-1. sequence: UID_x A1 A2 A3 -> A4
-2. sequence: UID_x A1 B1 A2 B2 A3 B3 -> A4 B4
-3. sequence: UID_x A1 B1 C1 A2 B2 C2 A3 B3 C3 -> A4 B4 C4
-4. full sequence: UID_x A1 B1 C1 D1 A2 B2 C2 D2 ... A30 B30 C30 D30 -> A31 B31 C31 D31
+Able to achieve 4.97% recall@5
 
 
 
 DDP using all GPUs available.
 # Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_aligned.py
+$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
 import json
 import random
-from utils import bagz_utils
 import config
 import torch
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+from peft import LoraConfig, get_peft_model, TaskType
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorWithPadding, DataCollatorForSeq2Seq, DataCollatorForLanguageModeling, default_data_collator
-from transformers.models.llama.modeling_llama import LlamaAttention
-from transformers import Trainer, get_cosine_schedule_with_warmup
-from torch.utils.data import Dataset, random_split
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, get_cosine_schedule_with_warmup
 from transformers import TrainerCallback
-from fine_tune import amazon_ori_template
-import pandas as pd
-import os
-from torch.optim import AdamW
 import numpy as np
 import bagz
-from torch.utils.data import Subset
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.optim.lr_scheduler import LambdaLR
-from transformers import TopKLogitsWarper, LogitsProcessorList
+import argparse
+from torch.utils.data import Subset
+import torch.nn.functional as F
 import math
-from utils import checkpoint_loading
-from peft import PeftModel, PeftConfig
+from torch.optim.lr_scheduler import LambdaLR
 
 
 MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"train_seq_pred_aligned"
-
-
-TRAIN_BATCH_SIZE = 16
-EPOCHS = 10    # training stablizes at epoch=120, batch_size=4, lr=1e-3, weight_decay=0.035
-LR = 5e-5
-WEIGHT_DECAY = 0.0
-
-EMB_LR = 5e-5       # 0.03 reach better region than 0.02, 0.04 overfit very fast
-BASE_LR = 1e-5      # 1e-6 is too small for full-attn update
-WD_EMB = 0.0        # Can't be too large, or will forget learning >0.2 is so wrong
-WD_BODY = 0.05       # >0.2 is wrong; 0.035 too small, overfit; 
-LORA_DROPOUT = 0.1     # turn to 0.3 leads to overfit, weirdly. 0.01 also overfits, 0.05 seems best
-LORA_RANK = 16      # 16 large rank overfit early
-LORA_RATIO = 1
-WARMUP_STEPS = 2_000    # 2k warmups is much better than 3K warmup
-DECAY_STEPS = 10_000     # 3k decay is worse -> needs quick decay
-MIN_LR_RATIO = 0.08     # 0.1 overfit, 0.08 overfit, 0.05 overfits very little, 0.03 will not learn well
+MODEL_SAVE_DIR = config.MODEL_DIR / f"train_seq_pred_weighted"
 
 
 
-"""
-EMB_LR:
-0.08 too big, loss go up, even with 0.35 lora_dropout, 0.01 wd_body
-0.06, 0.04 all learn slowly, 0.02 seems the best
+class Params:
+    TRAIN_BATCH_SIZE = 16
+    LR = 4e-4
+    WEIGHT_DECAY = 1e-3
+    TOTAL_STEPS = 16_000    # 13_000
 
-BASE_LR:
-1e-4 too big, 1e-6 seems best
+    LORA_DROPOUT = 0.1     # turn to 0.3 leads to overfit, weirdly. 0.01 also overfits, 0.05 seems best
+    LORA_RANK = 16      # 16 large rank overfit early
+    LORA_RATIO = 1
+    WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
 
-"""
-
-
-run_name = f"emb_lr{EMB_LR}_base_lr{BASE_LR}_wd_emb{WD_EMB}_wd_body{WD_BODY}_bs{TRAIN_BATCH_SIZE}_warmup_{WARMUP_STEPS}_decay{DECAY_STEPS}_epoch{EPOCHS}_lora_rank{LORA_RANK}_lora_ratio{LORA_RATIO}_lora_dropout{LORA_DROPOUT}_min_lr_ratio{MIN_LR_RATIO}"
-LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_subseq" / run_name
 
 TEMPLATE = """Rule:
             Each product ID has four hierarchical levels. 
@@ -132,15 +97,13 @@ class SeqDataset(Dataset):
         prompt_enc = self.tokenizer(
             prompt,
             add_special_tokens=False,
-            # truncation=True,
-            # max_length=self.max_prompt_length,
             truncation=False,
             padding=False
         )
 
         input_ids = prompt_enc["input_ids"]
 
-        mask_start = max(0, len(input_ids) -  7)
+        mask_start = max(0, len(input_ids) - 7)
         labels = [-100] * mask_start + input_ids[mask_start:]
         labels = labels[:len(input_ids)]
 
@@ -150,9 +113,10 @@ class SeqDataset(Dataset):
             }
 
 
-
 class SeqGenDataset(Dataset):
     def __init__(self, split="eval"):
+        if split == "train":
+            self.data_reader = bagz.Reader(config.TRAIN_DATA)
         if split == "eval":
             self.data_reader = bagz.Reader(config.EVAL_DATA)
         elif split == "test":
@@ -180,55 +144,6 @@ class SeqGenDataset(Dataset):
             "prompt": prompt,
             "target": target,
         }
-
-
-
-def make_weighted_labels(input_ids, tokenizer):
-    position_weights = [5, 1, 0.5, 0.01]
-    labels = input_ids.clone()
-    weights = torch.ones_like(labels, dtype=torch.float)
-
-    # Example: assume 4 main tokens per product ID
-    main_token_indices = [0, 2, 4, 6]
-    for i, idx in enumerate(main_token_indices):
-        if idx < len(weights):
-            weights[idx] = position_weights[i]
-
-    # Zero out padding
-    weights[labels == tokenizer.pad_token_id] = 0.0
-    return labels, weights
-
-
-class WeightedDataCollator:
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-
-    def __call__(self, batch):
-        # Extract input_ids and labels
-        input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
-        labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
-
-        # Compute loss weights per sample
-        loss_weights = []
-        for ex in input_ids:
-            _, w = make_weighted_labels(ex, self.tokenizer)
-            loss_weights.append(w)
-
-        # Pad sequences to same length
-        pad_id = self.tokenizer.pad_token_id
-        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_id)
-        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-100)
-        loss_weights = torch.nn.utils.rnn.pad_sequence(loss_weights, batch_first=True, padding_value=0.0)
-
-        attention_mask = (input_ids != pad_id).long()
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "loss_weights": loss_weights,
-        }
-
 
 
 def sft_data_collator(batch, tokenizer):
@@ -348,59 +263,6 @@ def evaluate_sequence_recall(
     return recalls_mean
 
 
-def get_warmup_decay_plateau_scheduler(
-    optimizer,
-    num_training_steps,
-    warmup_steps,
-    min_lr_ratio=0.1,
-    decay_steps=None  # exact number of steps to decay after warmup
-):
-    """
-    Scheduler with:
-    1. Linear warmup
-    2. Linear decay over a fixed number of steps
-    3. Flat plateau at a minimum learning rate
-
-    Args:
-        optimizer: torch optimizer
-        num_training_steps: total training steps
-        warmup_steps: steps to linearly increase LR
-        min_lr_ratio: final LR = min_lr_ratio * initial LR
-        decay_steps: number of steps to decay after warmup. If None, uses all remaining steps.
-    """
-
-    if decay_steps is None:
-        decay_steps = max(1, num_training_steps - warmup_steps)
-    else:
-        decay_steps = max(1, decay_steps)
-
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            # Linear warmup
-            return float(current_step) / float(max(1, warmup_steps))
-        elif current_step < warmup_steps + decay_steps:
-            # Linear decay
-            progress = (current_step - warmup_steps) / decay_steps
-            return max(min_lr_ratio, 1.0 - progress * (1.0 - min_lr_ratio))
-
-            # Exponential decay
-            # k = 5.0
-            # p = (current_step - warmup_steps) / decay_steps  # progress 0→1
-            # factor = math.exp(-k * p)
-            # return max(min_lr_ratio, factor)
-        
-            # reverse cosine decay
-            # p = (current_step - warmup_steps) / decay_steps
-            # # reverse cosine: fast at start, slow near end
-            # factor = min_lr_ratio + (1 - min_lr_ratio) * 0.5 * (1 - math.cos(math.pi * (1 - p)))
-            # return max(min_lr_ratio, 1 - factor)
-        else:
-            # Flat plateau
-            return min_lr_ratio
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-
 class GenerateEvalCallback(TrainerCallback):
     def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps=1000):
         self.trainer = trainer
@@ -411,10 +273,17 @@ class GenerateEvalCallback(TrainerCallback):
         self.batch_size = 8
         self.best_metric = None  # Track best metric
 
-    def on_evaluate(self, args, state, control, **kwargs):
+    def on_step_end(self, args, state, control, **kwargs):
+
+        # dynamically adjust evaluation frequency
+        if 8000 <= state.global_step:
+            eval_interval = 1000
+        else:
+            eval_interval = self.eval_steps
+
         # Run every eval_steps
-        if state.global_step > 0 and state.global_step % self.eval_steps == 0:
-        # if state.global_step > 0:
+        # if state.global_step > 0 and state.global_step % eval_interval == 0:
+        if state.global_step in [8000, 10000, 13000, 15000, 20000, 25000, 30000]:
 
             # If running in DDP, shard the dataset using DistributedSampler
             if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
@@ -425,9 +294,11 @@ class GenerateEvalCallback(TrainerCallback):
                 rank = 0
                 sampler = None
 
-            # Create DataLoader
+            # Create 
+            # small_dataset = Subset(self.eval_dataset, range(10))
             eval_loader = DataLoader(
                 self.eval_dataset,
+                # small_dataset,
                 batch_size=self.batch_size,
                 sampler=sampler,
                 shuffle=False,
@@ -467,103 +338,132 @@ class GenerateEvalCallback(TrainerCallback):
                     print(f"New best metric {current_metric:.4f}! Saving model...")
                     output_dir = f"{args.output_dir}/best_checkpoint"
                     self.trainer.save_model(output_dir)
+                    self.trainer.save_state()
 
         return control
 
 
-# --- Custom Trainer with two learning rates ---
-class TwoLRTrainer(Trainer):
-    def create_optimizer(self):
-        print("~~~~ Optimizer: ")
-        if self.optimizer is None:
-            # Custom learning rates and weight decays
-            emb_lr = EMB_LR       # for new embeddings
-            base_lr = BASE_LR      # for LoRA + transformer body
-            wd_emb = WD_EMB
-            wd_body = WD_BODY
+class WeightedSFTTrainer(Trainer):
+    def __init__(self, token_weights, alpha=0.5, **kwargs):
+        super().__init__(**kwargs)
+        self.token_weights = token_weights
+        self.alpha = alpha
+        self.gen_len = 7
+        # Preconvert to tensor for efficiency
+        self.token_weights = torch.tensor(token_weights, dtype=torch.float32)
 
-            # All other params except embeddings
-            other_params = [
-                p for n, p in self.model.named_parameters()
-                if "lora" in n
-            ]
+        # Normalize learning rate based on average weight
+        self.avg_weight = self.token_weights.mean().item()
+        print(f"Average token weight = {self.avg_weight:.3f}")
 
-            # Define optimizer param groups
-            optimizer_grouped_parameters = [
-                {"params": self.model.get_input_embeddings().parameters(), "lr": emb_lr, "weight_decay": wd_emb},
-                {"params": other_params, "lr": base_lr, "weight_decay": wd_body},
-            ]
 
-            optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
-            self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=10):
+        # Prevent HF Trainer from passing num_items_in_batch
+        self.model_accepts_loss_kwargs = False
 
-        return self.optimizer
+        # Forward pass
+        outputs = model(**inputs, return_dict=True)
+        logits = outputs.logits           # [B, T, V]
+        labels = inputs["labels"]         # [B, T]
+
+        shift_logits = logits[:, :-1].contiguous()   # [B, T-1, V]
+        shift_labels = labels[:, 1:].contiguous()    # [B, T-1]
+
+        B, T, V = logits.size()
+        G = self.gen_len
+
+        per_token_loss = F.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            reduction="none"
+        )
+        # reshape back to [B, T-1]
+        per_token_loss = per_token_loss.view(shift_labels.size())
+
+        gen_labels = labels[:, -G:]
+        gen_loss = per_token_loss[:, -G:]
+
+        weights = self.token_weights.to(gen_loss.device).unsqueeze(0).expand(B, -1)  # [B, G]
+        weighted_loss = gen_loss * weights
+        
+        ce_loss = weighted_loss.sum() / self.avg_weight
+
+        return (ce_loss, outputs) if return_outputs else ce_loss
     
-    
-    def create_scheduler(self, num_training_steps: int, optimizer=None):
-        """
-        Custom cosine learning rate schedule with warmup.
-        """
-        if self.lr_scheduler is None:
 
-            print("~~~~ SCheduler: ")
-            # --- Custom scheduler hyperparams ---
+    def create_scheduler(self, num_training_steps: int, optimizer):
+        args = self.args
+        p = args.lr_scheduler_kwargs
 
-            # # Use the optimizer passed in (if provided) or self.optimizer
-            opt = optimizer or self.optimizer
+        warmup_steps = args.warmup_steps
+        decay_steps = p["decay_steps"]
+        constant_steps = p["constant_steps"]
+        lr_floor = p["lr_floor"]              #  absolute LR floor
+        base_lr = args.learning_rate
 
-            # # --- Define the scheduler ---
-            # self.lr_scheduler = get_cosine_schedule_with_warmup(
-            #     opt,
-            #     num_warmup_steps=WARMUP_STEPS,
-            #     num_training_steps=num_training_steps,
-            #     num_cycles=0.5,  # single cosine cycle
-            # )
+        def lr_lambda(step):
+            # Warmup
+            if step < warmup_steps:
+                return step / warmup_steps
 
-            # ~~~~ Scheduler: Warmup -> Decay -> Plateau 
-            self.lr_scheduler = get_warmup_decay_plateau_scheduler(
-                opt,
-                num_training_steps=num_training_steps,
-                warmup_steps=WARMUP_STEPS,
-                min_lr_ratio=MIN_LR_RATIO,  # adjust as needed
-                decay_steps=DECAY_STEPS,
-            )
+            # Decay
+            elif step < warmup_steps + decay_steps:
+                progress = (step - warmup_steps) / decay_steps
+                cosine = 0.5 * (1 + math.cos(math.pi * progress))
+                floor_scale = lr_floor / base_lr
+                return max(floor_scale, cosine)
+
+            # Constant floor phase
+            else:
+                return lr_floor / base_lr
+
+        self.lr_scheduler = LambdaLR(optimizer, lr_lambda)
         return self.lr_scheduler
 
-    def log(self, logs, *args, **kwargs):
-        # Inject custom learning rates before logging
-        if hasattr(self, "optimizer") and self.optimizer is not None:
-            lrs = [group["lr"] for group in self.optimizer.param_groups]
-            for i, lr in enumerate(lrs):
-                logs[f"learning_rate_group_{i}"] = lr
-
-        # Call the parent Trainer's log() to let HF handle everything
-        super().log(logs, *args, **kwargs)
 
 
-def compute_loss(model, inputs, return_outputs=False):
-    labels = inputs.pop("labels")
-    loss_weights = inputs.pop("loss_weights")
-    outputs = model(**inputs)
-    logits = outputs.logits
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-    loss = loss * loss_weights.view(-1)
-    loss = loss.mean()
-    return (loss, outputs) if return_outputs else loss
 
+def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
+    print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
+    # print(vars(Params))
 
-def train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eval_dataset):
+    """
+        Scheduler types:
+       - "linear" = get_linear_schedule_with_warmup
+       - "cosine" = get_cosine_schedule_with_warmup
+       - "cosine_with_restarts" = get_cosine_with_hard_restarts_schedule_with_warmup
+       - "polynomial" = get_polynomial_decay_schedule_with_warmup
+       - "constant" =  get_constant_schedule
+       - "constant_with_warmup" = get_constant_schedule_with_warmup
+       - "inverse_sqrt" = get_inverse_sqrt_schedule
+       - "reduce_lr_on_plateau" = get_reduce_on_plateau_schedule
+       - "cosine_with_min_lr" = get_cosine_with_min_lr_schedule_with_warmup
+       - "warmup_stable_decay" = get_wsd_schedule
+    """
+
     # --- Training arguments ---
     training_args = TrainingArguments(
         output_dir=MODEL_SAVE_DIR,
-        logging_dir=LOGGING_DIR,
-        per_device_train_batch_size=TRAIN_BATCH_SIZE,
+        logging_dir=params.LOGGING_DIR,
+        per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=1,
-        num_train_epochs=EPOCHS,
-        learning_rate=LR,   # base LR passed to Trainer, overridden by our custom groups
+        # num_train_epochs=EPOCHS,
+        max_steps=params.TOTAL_STEPS,
+        learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
+        weight_decay=params.WEIGHT_DECAY,
+        warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
+        # lr_scheduler_type="cosine_with_min_lr",  # can also try "cosine", "linear", "constant"
+        # lr_scheduler_kwargs={"num_cycles": 2},
+        # min_lr=2e-5,
+        lr_scheduler_kwargs={
+            "decay_steps": 27000,
+            "constant_steps": 30000,
+            "lr_floor": 2e-5,
+        },
         logging_steps=50,
-        save_strategy="epoch",
+        # save_strategy="steps",
+        # save_steps=1000,
+        save_strategy="no",
         save_total_limit=1,
         eval_strategy="steps",
         eval_steps=500,
@@ -576,46 +476,33 @@ def train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eva
         ddp_find_unused_parameters=False,
     )
     
-    
     # Define LoRA config
     lora_config = LoraConfig(
-        r=LORA_RANK,                      # rank
-        lora_alpha=LORA_RANK * LORA_RATIO,
+        r=params.LORA_RANK,                      # rank
+        lora_alpha=params.LORA_RANK * params.LORA_RATIO,
         # target_modules=["q_proj", "v_proj"],  # attention projections
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=LORA_DROPOUT,
+        lora_dropout=params.LORA_DROPOUT,
         bias="none",
         task_type=TaskType.CAUSAL_LM
     )
 
     peft_model = get_peft_model(model, lora_config)
 
-    # Save old_vocab_size to config (so the Trainer can access it)
-    peft_model.config.old_vocab_size = old_vocab_size
-
-    # Allow new embeddings to train
-    for param in peft_model.get_input_embeddings().parameters():
-        param.requires_grad = True
-
-    # ensures that only new vocabulary tokens get updated.
-    def zero_old_token_grads(grad):
-        grad[:old_vocab_size] = 0
-        return grad
+    # Freeze all base model parameters (done automatically by get_peft_model)
+    for name, param in peft_model.named_parameters():
+        if "lora_" not in name:
+            param.requires_grad = False
     
-    # Register the hook on the input embeddings
-    peft_model.get_input_embeddings().weight.register_hook(zero_old_token_grads)
-
-
-    data_collator = WeightedDataCollator(tokenizer=tokenizer)
     
     # --- Trainer ---
-    trainer = TwoLRTrainer(
+    trainer = WeightedSFTTrainer(
         model=peft_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=data_collator,
-        compute_loss=compute_loss,
+        token_weights=[0.05, 0.01, 2.0, 0.01, 1.0, 0.01, 1.0],
+        data_collator=lambda batch: sft_data_collator(batch, tokenizer),  # use custom collator
     )
 
     callback = GenerateEvalCallback(
@@ -623,7 +510,7 @@ def train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eva
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=1000 
+        eval_steps=5000 
     )
     trainer.add_callback(callback)
 
@@ -631,6 +518,27 @@ def train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eva
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Training configuration")
+
+    parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
+    parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=2, help="Training batch size")
+    parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
+    parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
+    parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
+    parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
+
+    args = parser.parse_args()
+
+    for key, value in vars(args).items():
+        setattr(Params, key, value)
+
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_weighted" / run_name
+
+    print(f"!!! total_steps: {Params.TOTAL_STEPS}")
+    print(vars(Params))
+
     model, tokenizer = load_model_tokenizer()
     old_vocab_size = 128_256
     
@@ -639,8 +547,10 @@ def main():
 
     gen_eval_dataset = SeqGenDataset("eval")
 
-    train(model, tokenizer, old_vocab_size, train_dataset, eval_dataset, gen_eval_dataset)
+    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
     
 
 if __name__ == "__main__":
     main()
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()

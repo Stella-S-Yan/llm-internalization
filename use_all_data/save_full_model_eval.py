@@ -4,7 +4,7 @@ Evaluate the model too.
 
 Recall mean: tensor([0.0204, 0.0516, 0.0726])
 
-$ torchrun --nproc_per_node=8 save_full_model.py
+$ torchrun --nproc_per_node=8 save_full_model_eval.py
 """
 
 import torch
@@ -21,7 +21,8 @@ from torch.utils.data import Subset
 MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 ADAPTOR_DIR = config.MODEL_DIR / f"train_seq_pred_aligned_phase1"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"merged_best_sft"
+# MODEL_SAVE_DIR = config.MODEL_DIR / f"merged_best_sft"
+MODEL_SAVE_DIR = config.MODEL_DIR / "train_DPO" / "checkpoint-8455"
 
 
 def merge_and_save_model():
@@ -43,6 +44,20 @@ def merge_and_save_model():
 def load_model():
     model = AutoModelForCausalLM.from_pretrained(MODEL_SAVE_DIR)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_SAVE_DIR)
+
+    model.config.vocab_size = len(tokenizer)
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    model.config.bos_token_id = tokenizer.bos_token_id
+    model.generation_config.bos_token_id = tokenizer.bos_token_id
+
     return model, tokenizer
 
 

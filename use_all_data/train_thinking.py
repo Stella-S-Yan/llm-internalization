@@ -24,11 +24,13 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 from torch.utils.data import Subset
+import math
+from torch.optim.lr_scheduler import LambdaLR
+from utils import bagz_utils
 
 
 MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"train_seq_pred_aligned_phase1"
 
 
 
@@ -44,19 +46,23 @@ class Params:
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
 
 
-TEMPLATE = """Rule:
-            Each product ID has four hierarchical levels. 
-            Earlier levels in the ID are more important than later levels.
+PROMPT_TEMPLATE = """
+                User history:
+                user {uid}: {history}
+                Predict next semantic ID with reasoning:
+            """
 
-            Task:
-            Given a user's purchase history as a list of product IDs, predict the next product ID with four hierarchical levels.
+TARGET_TEMPLATE = """
+            <hsz>{history_len}</hsz>
+            <hist>
+                {sid_cat_list}
+            </hist>
+            <cat>{target_sid_cat}</cat>
+            <lvl>{target_sid_token_hierarchy}</lvl>
+            <sid>{target_sid}</sid>
+            {eos}
+            """
 
-            History:
-            user {uid}: {history}
-
-            Next:
-            {next}
-        """
 
 def load_model_tokenizer():
     model = AutoModelForCausalLM.from_pretrained(MODEL_INPUT_DIR)
@@ -65,10 +71,13 @@ def load_model_tokenizer():
     return model, tokenizer
 
 
-class SeqDataset(Dataset):
-    def __init__(self, tokenizer, split):
 
+class ReasoningDataset(Dataset):
+    def __init__(self, tokenizer, split):
         self.tokenizer = tokenizer
+        meta_df = bagz_utils.read_parquet(config.META_W_ALL_SID) 
+        # build mapping once
+        self.sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
 
         if split == "train":
             self.data_reader = bagz.Reader(config.TRAIN_DATA)
@@ -79,17 +88,38 @@ class SeqDataset(Dataset):
 
         self.data = [json.loads(record.decode()) for record in self.data_reader]
 
-
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         record = self.data[idx]
         uid = record["uid"]
-        input = record["input"]
+        history = record["input"]
         target = record["target"]
 
-        prompt = TEMPLATE.format(uid=uid, history=input, next=target).strip()
+        sids = history.split(';')
+        sids = [part.strip() for part in sids]
+        history_len = len(sids)
+
+        cats = [self.sid_to_cat.get(i) for i in sids]
+        sid_cat_list =  "\n".join(f"{i}: {sids[i]} -> {cats[i]}" for i in range(len(sids)))
+        
+        target_sid_cat = self.sid_to_cat.get(target)
+        target_sid_token_hierarchy = " | ".join(target.split())
+
+        prompt = PROMPT_TEMPLATE.format(
+            uid=uid, 
+            history=history.strip()
+        ).strip()
+
+        result = TARGET_TEMPLATE.format(
+            history_len=str(history_len),
+            sid_cat_list=sid_cat_list,
+            target_sid_cat=target_sid_cat,
+            target_sid_token_hierarchy=target_sid_token_hierarchy,
+            target_sid=target,
+            eos=self.tokenizer.eos_token
+            ).strip()
 
         prompt_enc = self.tokenizer(
             prompt,
@@ -98,11 +128,20 @@ class SeqDataset(Dataset):
             padding=False
         )
 
-        input_ids = prompt_enc["input_ids"]
+        result_enc = self.tokenizer(
+            result,
+            add_special_tokens=False,
+            truncation=False,
+            padding=False
+        )
 
-        mask_start = max(0, len(input_ids) -  7)
-        labels = [-100] * mask_start + input_ids[mask_start:]
-        labels = labels[:len(input_ids)]
+        input_ids = prompt_enc["input_ids"] + result_enc["input_ids"]
+
+        # result starts immediately after prompt
+        result_start = len(prompt_enc["input_ids"])
+
+        # attention_mask = [1] * len(input_ids)
+        labels = [-100] * result_start + input_ids[result_start:]
 
         return {
             "input_ids": torch.tensor(input_ids),
@@ -110,8 +149,14 @@ class SeqDataset(Dataset):
             }
 
 
-class SeqGenDataset(Dataset):
-    def __init__(self, split="eval"):
+class SeqReasoningDataset(Dataset):
+    def __init__(self, tokenizer, split):
+        self.tokenizer = tokenizer
+        
+        meta_df = bagz_utils.read_parquet(config.META_W_ALL_SID) 
+        # build mapping once
+        self.sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
+
         if split == "train":
             self.data_reader = bagz.Reader(config.TRAIN_DATA)
         if split == "eval":
@@ -122,24 +167,52 @@ class SeqGenDataset(Dataset):
         # Convert all records in one shot
         self.data = [json.loads(record.decode()) for record in self.data_reader]
 
+
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         record = self.data[idx]
         uid = record["uid"]
-        input = record["input"]
+        history = record["input"]
         target = record["target"]
 
-        prompt = TEMPLATE.format(uid=uid, history=input, next=target).strip()
+        sids = history.split(';')
+        sids = [part.strip() for part in sids]
+        history_len = len(sids)
 
-        toks = prompt.split(" ")
-        prompt = " ".join(toks[:-4])
-        target = " ".join(toks[-4:])
+        cats = [self.sid_to_cat.get(i) for i in sids]
+        sid_cat_list =  "\n".join(f"{i}: {sids[i]} -> {cats[i]}" for i in range(len(sids)))
+        
+        target_sid_cat = self.sid_to_cat.get(target)
+        target_sid_token_hierarchy = " | ".join(target.split())
 
+        prompt = PROMPT_TEMPLATE.format(
+            uid=uid, 
+            history=history.strip()
+        ).strip()
+
+        result = TARGET_TEMPLATE.format(
+            history_len=str(history_len),
+            sid_cat_list=sid_cat_list,
+            target_sid_cat=target_sid_cat,
+            target_sid_token_hierarchy=target_sid_token_hierarchy,
+            target_sid=target,
+            eos=self.tokenizer.eos_token
+            ).strip()
+
+        solution = {
+            "hsz": history_len,
+            "hist": cats,
+            "cat": target_sid_cat,
+            "sid": target,
+        }
+        
+        
         return {
             "prompt": prompt,
-            "target": target,
+            "target": result,
+            "solution": solution,
         }
 
 
@@ -173,91 +246,99 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=8,
+    max_new_tokens=2, # only for faster evaluation since only does 1 token decoding, can set to 8,   
     top_k_list=[1, 5, 10],
-    print_random_example=True,  # new flag
+    print_random_example=True,
 ):
-    """
-    Batched sequence-level recall evaluation.
-
-    Args:
-        model: Hugging Face causal LM
-        tokenizer: Hugging Face tokenizer
-        eval_dataset: list of dicts with 'prompt' and 'target' fields
-        batch_size: number of prompts per batch
-        num_beams: number of beams for beam search
-        max_new_tokens: maximum tokens to generate
-        top_k_list: which recalls to compute (e.g., [1,5,10])
-
-    Returns:
-        dict: {'recall_1': float, 'recall_5': float, ...}
-    """
     model.eval()
     device = model.device
 
-    # Initialize recall lists
     recalls_dict = {k: [] for k in top_k_list}
-    printed = False  # track if we've printed already
+    printed = False  
+    max_k = max(top_k_list)
 
-    # Process dataset in batches
     for batch in tqdm(eval_loader, desc="Evaluating"):
         prompts = batch["prompt"]
         targets = batch["target"]
-
-        # Tokenize batch
-        inputs = tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-        ).to(device)
-
         batch_size = len(prompts)
-        max_k = max(top_k_list)
 
-        
-        # Generate sequences for the batch
+        # Extract clean target token (strip EOS)
+        target_clean = [t.split()[0] for t in targets]   # list length B
+
+        # Tokenize prompt batch
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        prompt_len = inputs["input_ids"].shape[1]
+
+        # Beam generation
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, max(top_k_list)),
-            num_return_sequences=max(top_k_list),
+            num_beams=max(num_beams, max_k),
+            num_return_sequences=max_k,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
         )
 
-        # Reshape outputs: (batch_size, num_return_sequences, seq_len)
-        batch_outputs = outputs.view(batch_size, max(top_k_list), -1)
+        # (B, K, L)
+        outputs = outputs.view(batch_size, max_k, -1)
 
-        # Decode and compute top-k recall
+        # Slice off prompt
+        gen = outputs[:, :, prompt_len:]  # shape [B,K,L]
+        L = gen.size(-1)
+
+        # EOS mask
+        eos_mask = (gen == tokenizer.eos_token_id)  # [B,K,L]
+
+        # First EOS pos (or L if none)
+        # Produce index vector [B,K]
+        has_eos = eos_mask.any(dim=-1)
+        eos_pos = torch.where(
+            has_eos,
+            eos_mask.float().argmax(dim=-1),
+            torch.full((batch_size, max_k), L - 1, dtype=torch.long, device=device),
+        )
+
+        # ---- Vectorized slicing using gather ----
+        # Build arange index [L]
+        idx = torch.arange(L, device=device).view(1,1,L)  # [1,1,L]
+
+        # mask positions beyond eos_pos
+        mask = idx <= eos_pos.unsqueeze(-1)   # [B,K,L]
+        # replace beyond-eos with pad so decoding truncates naturally
+        truncated = torch.where(mask, gen, tokenizer.pad_token_id)
+
+        # Flatten for batch decoding
+        flat = truncated.reshape(batch_size * max_k, L)
+
+        decoded = tokenizer.batch_decode(flat, skip_special_tokens=True)
+        decoded = [d.strip() for d in decoded]
+
+        # Reshape back to [B][K]
+        decoded = [
+            decoded[i * max_k : (i + 1) * max_k]
+            for i in range(batch_size)
+        ]
+
+        # ---- Vectorized hit checking ----
+        # Compare first token only (semantic ID)
         for i in range(batch_size):
-            prompt_len = inputs["input_ids"].size(1)
-            decoded_outputs = [
-                tokenizer.decode(batch_outputs[i, k, prompt_len:], skip_special_tokens=True)
-                for k in range(max_k)
-            ]
-            # print(decoded_outputs)
-
-            hits = [1 if targets[i] in o else 0 for o in decoded_outputs]
+            cand_first_tokens = [d.split()[0] for d in decoded[i] if d.split()]     # skip blank strings
+            hit_flags = [int(target_clean[i] == tok) for tok in cand_first_tokens]
             for k in top_k_list:
-                recalls_dict[k].append(int(any(hits[:k])))
+                recalls_dict[k].append(int(any(hit_flags[:k])))
 
-
-        # ---- Print one random batch example ----
+        # Print one example
         if print_random_example and not printed:
-            rand_idx = random.randint(0, batch_size - 1)
+            ri = np.random.randint(batch_size)
             print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[rand_idx]}")
-            print(f"Target:\n{targets[rand_idx]}")
-            for k, gen in enumerate(decoded_outputs[:5]):  # show top 5 generations
-                print(f"[Gen {k+1}] {gen}")
-            print("========================\n")
+            print("Prompt:", prompts[ri])
+            print("Target:", target_clean[ri])
+            for k in range(min(5, max_k)):
+                print(f"[Gen {k+1}] {decoded[ri][k]}")
+            print("==========================\n")
             printed = True
-        # ----------------------------------------
 
-    # Compute mean recall
-    recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
-    return recalls_mean
+    return {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
 
 
 class GenerateEvalCallback(TrainerCallback):
@@ -267,13 +348,13 @@ class GenerateEvalCallback(TrainerCallback):
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
-        self.batch_size = 8
+        self.batch_size = 64    # 16
         self.best_metric = None  # Track best metric
 
     def on_step_end(self, args, state, control, **kwargs):
 
         # dynamically adjust evaluation frequency
-        if 8000 <= state.global_step:
+        if 5000 <= state.global_step:
             eval_interval = 1000
         else:
             eval_interval = self.eval_steps
@@ -339,113 +420,36 @@ class GenerateEvalCallback(TrainerCallback):
         return control
 
 
-def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
-    print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
-    print(vars(Params))
-
-    # --- Training arguments ---
-    training_args = TrainingArguments(
-        output_dir=MODEL_SAVE_DIR,
-        logging_dir=params.LOGGING_DIR,
-        per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
-        gradient_accumulation_steps=1,
-        # num_train_epochs=EPOCHS,
-        max_steps=params.TOTAL_STEPS,
-        learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
-        weight_decay=params.WEIGHT_DECAY,
-        warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
-        lr_scheduler_type="cosine",  # can also try "cosine", "linear"
-        logging_steps=50,
-        # save_strategy="steps",
-        # save_steps=1000,
-        save_strategy="no",
-        save_total_limit=1,
-        eval_strategy="steps",
-        eval_steps=500,
-        # eval_strategy="no",
-        optim="adamw_torch",
-        # optim="adafactor",
-        bf16=True,          # <<< enable bfloat16 (H100 optimized)
-        fp16=False,         # optional: if you want fp16 instead
-        report_to="tensorboard",
-        ddp_find_unused_parameters=False,
-    )
-    
-    
-    # Define LoRA config
-    lora_config = LoraConfig(
-        r=params.LORA_RANK,                      # rank
-        lora_alpha=params.LORA_RANK * params.LORA_RATIO,
-        # target_modules=["q_proj", "v_proj"],  # attention projections
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=params.LORA_DROPOUT,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM
-    )
-
-    peft_model = get_peft_model(model, lora_config)
-
-    # Freeze all base model parameters (done automatically by get_peft_model)
-    for name, param in peft_model.named_parameters():
-        if "lora_" not in name:
-            param.requires_grad = False
-    
-    
-    # --- Trainer ---
-    trainer = Trainer(
-        model=peft_model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=lambda batch: sft_data_collator(batch, tokenizer),  # use custom collator
-    )
-
-    callback = GenerateEvalCallback(
-        trainer=trainer,
-        eval_dataset=gen_eval_dataset,
-        tokenizer=tokenizer,
-        eval_fn=evaluate_sequence_recall,
-        eval_steps=5000 
-    )
-    trainer.add_callback(callback)
-
-    trainer.train()
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Training configuration")
-
-    parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
-    parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
-    parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
-    parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
-    parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
-    parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
-
-    args = parser.parse_args()
-
-    for key, value in vars(args).items():
-        setattr(Params, key, value)
-
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
-
-    print(f"!!! total_steps: {Params.TOTAL_STEPS}")
-    print(vars(Params))
-
-    model, tokenizer = load_model_tokenizer()
-    old_vocab_size = 128_256
-    
-    train_dataset = SeqDataset(tokenizer, "train")
-    eval_dataset = SeqDataset(tokenizer, "eval")
-
-    gen_eval_dataset = SeqGenDataset("eval")
-
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
+class CustomTrainer(Trainer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
     
 
-if __name__ == "__main__":
-    main()
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
+    def create_scheduler(self, num_training_steps: int, optimizer):
+        args = self.args
+        p = args.lr_scheduler_kwargs
+
+        warmup_steps = args.warmup_steps
+        decay_steps = p["decay_steps"]
+        constant_steps = p["constant_steps"]
+        lr_floor = p["lr_floor"]              #  absolute LR floor
+        base_lr = args.learning_rate
+
+        def lr_lambda(step):
+            # Warmup
+            if step < warmup_steps:
+                return step / warmup_steps
+
+            # Decay
+            elif step < warmup_steps + decay_steps:
+                progress = (step - warmup_steps) / decay_steps
+                cosine = 0.5 * (1 + math.cos(math.pi * progress))
+                floor_scale = lr_floor / base_lr
+                return max(floor_scale, cosine)
+
+            # Constant floor phase
+            else:
+                return lr_floor / base_lr
+
+        self.lr_scheduler = LambdaLR(optimizer, lr_lambda)
+        return self.lr_scheduler
