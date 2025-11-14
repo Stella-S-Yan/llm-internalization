@@ -37,7 +37,18 @@ class Params:
     ADAPTOR_SAVE_DIR = ''
 
 
+def save_model():
+    model_input_dir = config.MODEL_DIR / "all_sid_aligned_model"
+    adaptor_dir = config.MODEL_DIR / "train_thinking"
+    checkpoint_dir = "checkpoint-50000"
+    model_save_dir = config.MODEL_DIR / "think_model_best"
 
+    merge_save_model.merge_and_save_model(
+        model_input_dir=model_input_dir,
+        adaptor_dir=adaptor_dir,
+        checkpoint_dir=checkpoint_dir,
+        model_save_dir=model_save_dir
+    )
 
 def train(model, tokenizer, train_dataset, eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
@@ -103,7 +114,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
 
     trainer.train()
 
-
+    save_model()
 
 
 def main():
@@ -116,7 +127,7 @@ def main():
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
-    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default=0.2, help="Where to save the trained model")
+    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default=' ', help="Where to save the trained adaptor")
 
     args = parser.parse_args()
 

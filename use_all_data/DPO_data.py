@@ -8,7 +8,7 @@ $ torchrun --nproc_per_node=8 DPO_data.py
 
 import random
 import torch
-from use_all_data import save_full_model_eval, train_seq_pred_aligned_phase1
+from use_all_data import eval_model, train_seq_pred_aligned_phase1
 from torch.utils.data import DataLoader, DistributedSampler
 import os
 from tqdm import tqdm
@@ -199,7 +199,7 @@ def main(split="train", batch_size=8):
         rank = 0
         world_size = 1
 
-    model, tokenizer = save_full_model_eval.load_model()
+    model, tokenizer = eval_model.load_model()
     model.eval()
     device = torch.device(f"cuda:{rank}")
     model.to(device)

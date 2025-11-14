@@ -58,15 +58,14 @@ TARGET_TEMPLATE = """
                 {sid_cat_list}
             </hist>
             <cat>{target_sid_cat}</cat>
-            <lvl>{target_sid_token_hierarchy}</lvl>
             <sid>{target_sid}</sid>
             {eos}
             """
 
 
-def load_model_tokenizer():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_INPUT_DIR)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_INPUT_DIR)
+def load_model_tokenizer(model_input_dir):
+    model = AutoModelForCausalLM.from_pretrained(model_input_dir)
+    tokenizer = AutoTokenizer.from_pretrained(model_input_dir)
 
     return model, tokenizer
 
@@ -102,10 +101,9 @@ class ReasoningDataset(Dataset):
         history_len = len(sids)
 
         cats = [self.sid_to_cat.get(i) for i in sids]
-        sid_cat_list =  "\n".join(f"{i}: {sids[i]} -> {cats[i]}" for i in range(len(sids)))
+        sid_cat_list =  "\n".join(f"{i}: {cats[i]}" for i in range(len(sids)))
         
         target_sid_cat = self.sid_to_cat.get(target)
-        target_sid_token_hierarchy = " | ".join(target.split())
 
         prompt = PROMPT_TEMPLATE.format(
             uid=uid, 
@@ -116,7 +114,6 @@ class ReasoningDataset(Dataset):
             history_len=str(history_len),
             sid_cat_list=sid_cat_list,
             target_sid_cat=target_sid_cat,
-            target_sid_token_hierarchy=target_sid_token_hierarchy,
             target_sid=target,
             eos=self.tokenizer.eos_token
             ).strip()
@@ -182,10 +179,9 @@ class SeqReasoningDataset(Dataset):
         history_len = len(sids)
 
         cats = [self.sid_to_cat.get(i) for i in sids]
-        sid_cat_list =  "\n".join(f"{i}: {sids[i]} -> {cats[i]}" for i in range(len(sids)))
+        sid_cat_list =  "\n".join(f"{i}: {cats[i]}" for i in range(len(sids)))
         
         target_sid_cat = self.sid_to_cat.get(target)
-        target_sid_token_hierarchy = " | ".join(target.split())
 
         prompt = PROMPT_TEMPLATE.format(
             uid=uid, 
@@ -196,10 +192,16 @@ class SeqReasoningDataset(Dataset):
             history_len=str(history_len),
             sid_cat_list=sid_cat_list,
             target_sid_cat=target_sid_cat,
-            target_sid_token_hierarchy=target_sid_token_hierarchy,
             target_sid=target,
             eos=self.tokenizer.eos_token
             ).strip()
+
+        prompt_enc = self.tokenizer(
+            prompt,
+            add_special_tokens=False,
+            truncation=False,
+            padding=False
+        )
 
         solution = {
             "hsz": history_len,
@@ -210,7 +212,7 @@ class SeqReasoningDataset(Dataset):
         
         
         return {
-            "prompt": prompt,
+            "prompt": {"prompt": prompt, "prompt_token_ids": prompt_enc["input_ids"]},
             "target": result,
             "solution": solution,
         }

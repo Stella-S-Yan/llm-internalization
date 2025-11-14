@@ -1,12 +1,20 @@
 #!/bin/bash
 set +e
 
+# Start vLLM server first
+# $ trl vllm-serve --model think_model_best/ --dtype half
+
 # pick on good setting and explore more
 runs=(
   # "--LR 4e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 8 --LORA_RATIO 2 --TOTAL_STEPS 40000 --LORA_DROPOUT 0.2 --ADAPTOR_SAVE_DIR train_thinking "
 
-  # maximum can handel batchsize = 8
-  "--LR 6e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 8 --LORA_RATIO 2 --TOTAL_STEPS 50000 --LORA_DROPOUT 0.2 --ADAPTOR_SAVE_DIR train_thinking "
+  # maximum can handel batchsize = 8  
+  # Policy collapse around step 600~800. LR too high, beta = 0
+  # "--LR 6e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 8 --LORA_RATIO 2 --TOTAL_STEPS 50000 --LORA_DROPOUT 0.2 --ADAPTOR_SAVE_DIR train_thinking "
+
+  # beta = 0.2
+  "--LR 5e-6 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 8 --LORA_RATIO 2 --TOTAL_STEPS 50000 --LORA_DROPOUT 0.2 --ADAPTOR_SAVE_DIR train_thinking "
+
 )
 
 

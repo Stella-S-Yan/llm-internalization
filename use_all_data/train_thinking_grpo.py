@@ -157,11 +157,12 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
     grpo_config = GRPOConfig(
         output_dir=config.MODEL_DIR / params.ADAPTOR_SAVE_DIR,
         learning_rate=params.LR,
-        beta=0.0, # KL coefficient
+        beta=0.2, # KL coefficient
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_checkpointing=True,
         shuffle_dataset=True,
         num_generations=4,
+        steps_per_generation=4,
         max_completion_length=393,
         # generation_kwargs={
         #     "max_new_tokens": 393,
@@ -209,7 +210,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Training configuration")
 
-    parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--LR", type=float, default=5e-6, help="Learning rate")
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=8, help="Training batch size")
     parser.add_argument("--LORA_RANK", type=int, default=8, help="LoRA rank")
