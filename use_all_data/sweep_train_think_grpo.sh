@@ -13,6 +13,6 @@ runs=(
 for params in "${runs[@]}"; do
   echo "Starting run with: $params"
   # torchrun fails. The trainer uses accelerate internally and run on all gpus
-  python train_thinking_grpo.py $params 
+  CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 python train_thinking_grpo.py $params 
   echo "Finished run with: $params"
 done

@@ -73,7 +73,7 @@ def extract_hist_predictions(text):
 def semantic_reward_fn(completions, prompts=None, **kwargs):
     """
     completions: list of dicts {"content": text_generated"}
-    true_outputs: list of dicts per prompt with keys:
+    kwargs["solution"]: list of dicts per prompt with keys:
         "hsz": int
         "hist": list of categories
         "cat": str
@@ -82,44 +82,52 @@ def semantic_reward_fn(completions, prompts=None, **kwargs):
     """
     rewards = []
 
-    solutions = kwargs["solution"]
+    solutions = kwargs.get("solution", [])
     for i, complete in enumerate(completions):
-        true_data = solutions[i]
+        true_data = solutions[i] if i < len(solutions) else {}
         r = 0.0
 
         # --- 1. hsz (small bonus) ---
-        hsz_pred = int(extract_tag(complete, "hsz"))
-        if hsz_pred == true_data["hsz"]:
-            r += 0.1
+        hsz_pred = extract_tag(complete, "hsz")
+        try:
+            hsz_pred = int(hsz_pred)
+            if hsz_pred == true_data.get("hsz"):
+                r += 0.1
+        except (TypeError, ValueError):
+            pass  # skip if None or not int
 
         # --- 2. hist (small bonus) ---
-        hist_pred = extract_hist_predictions(complete)
-        matches = sum(p == t for p, t in zip(hist_pred, true_data["hist"]))
-        r += 0.2 * matches / max(len(true_data["hist"]),1)
+        hist_pred = extract_hist_predictions(complete) or []
+        true_hist = true_data.get("hist") or []
+        matches = sum(p == t for p, t in zip(hist_pred, true_hist))
+        if len(true_hist) > 0:
+            r += 0.2 * matches / len(true_hist)
 
         # --- 3. cat (medium bonus) ---
         cat_pred = extract_tag(complete, "cat")
-        if cat_pred == true_data["cat"]:
+        if cat_pred is not None and cat_pred == true_data.get("cat"):
             r += 0.2
 
         # --- 4. sid (dominant) ---
         sid_pred = extract_tag(complete, "sid")
         true_sid = true_data.get("sid")
+        if sid_pred is not None and true_sid is not None:
+            pred_tokens = sid_pred.split()
+            true_tokens = true_sid.split()
+            match_len = 0
+            for pt, tt in zip(pred_tokens, true_tokens):
+                if pt == tt:
+                    match_len += 1
+                else:
+                    break
+            if len(true_tokens) > 0:
+                r += 1.0 * (match_len / len(true_tokens))
+        # If sid_pred or true_sid is None, just skip / reward nothing
 
-        pred_tokens = sid_pred.split()
-        true_tokens = true_sid.split()
-        match_len = 0
-        for pt, tt in zip(pred_tokens, true_tokens):
-            if pt == tt:
-                match_len += 1
-            else:
-                break
-        
-        r += 1.0 * (match_len / max(len(true_tokens),1))
-       
         rewards.append(r)
 
     return rewards
+
 
 
 def train(model, tokenizer, train_dataset, eval_dataset, params):
@@ -171,13 +179,16 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         # max_steps=params.TOTAL_STEPS,
         logging_dir=params.LOGGING_DIR,
         save_strategy="steps",
-        save_steps=50,
-        eval_strategy="steps",
-        eval_steps=50,
+        save_steps=10,
+        # eval_strategy="steps",
+        # eval_steps=50,
         bf16=True, 
         report_to="tensorboard",
         num_train_epochs=1,
         logging_steps=10,
+        use_vllm=True,
+        vllm_mode="server",  # default value, can be omitted
+        vllm_server_base_url="http://0.0.0.0:8000"
     )
 
     trainer = GRPOTrainer(
@@ -185,7 +196,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         processing_class=tokenizer,
         args=grpo_config,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        # eval_dataset=eval_dataset,
         reward_funcs=semantic_reward_fn,
     )
 
@@ -201,7 +212,8 @@ def main():
     parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=8, help="Training batch size")
-    parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
+    parser.add_argument("--LORA_RANK", type=int, default=8, help="LoRA rank")
+    parser.add_argument("--LORA_RATIO", type=float, default=4, help="LoRA adapter ratio")
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
@@ -212,7 +224,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_num_epocs{1}"
     Params.LOGGING_DIR =  config.RUN_DIR / "train_think_grpo" / run_name
     Params.ADAPTOR_SAVE_DIR = config.MODEL_DIR / "train_think_grpo/adaptor"
 
