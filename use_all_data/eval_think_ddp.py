@@ -14,7 +14,7 @@ import torch
 from tqdm import tqdm
 import config
 from use_all_data import train_thinking
-from torch.utils.data import DataLoader, Subset, DistributedSampler
+from torch.utils.data import DataLoader, Subset
 import re
 import os
 from transformers import AutoTokenizer
@@ -112,7 +112,7 @@ def collate_fn(batch):
 
 def main():
     # --- assign devices via vLLM ---
-    model_dir = config.MODEL_DIR / "think_model_best"
+    model_dir = config.MODEL_DIR / "think_model_sft"
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
     # --- Load vLLM engine on all GPUs ---
