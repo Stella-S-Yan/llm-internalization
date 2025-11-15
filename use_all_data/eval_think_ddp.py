@@ -5,6 +5,9 @@ own vllm-based inference and return local recall statistic.
 Results from devices are aggregated and print out the final global recall@k
 
 vLLM does not work with DDP, so don't use torchrun
+
+With Reasoning SFT, achieves this result
+Global Recall: {1: np.float64(0.02164289227742253), 5: np.float64(0.05213969503197245), 10: np.float64(0.0724858024415329)}
 """
 
 import torch
