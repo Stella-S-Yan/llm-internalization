@@ -16,10 +16,10 @@ from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import argparse
 from use_all_data import train_thinking
-from utils import merge_save_model
+from utils import merge_save_load_model
 
 
-MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -36,19 +36,6 @@ class Params:
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ADAPTOR_SAVE_DIR = ''
 
-
-def save_model():
-    model_input_dir = config.MODEL_DIR / "all_sid_aligned_model"
-    adaptor_dir = config.MODEL_DIR / "train_thinking"
-    checkpoint_dir = "checkpoint-50000"
-    model_save_dir = config.MODEL_DIR / "think_model_best"
-
-    merge_save_model.merge_and_save_model(
-        model_input_dir=model_input_dir,
-        adaptor_dir=adaptor_dir,
-        checkpoint_dir=checkpoint_dir,
-        model_save_dir=model_save_dir
-    )
 
 def train(model, tokenizer, train_dataset, eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
@@ -114,8 +101,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
 
     trainer.train()
 
-    save_model()
-
 
 def main():
     parser = argparse.ArgumentParser(description="Training configuration")
@@ -127,7 +112,7 @@ def main():
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
-    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default=' ', help="Where to save the trained adaptor")
+    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='train_thinking_sft', help="Where to save the trained adaptor")
 
     args = parser.parse_args()
 
@@ -135,23 +120,22 @@ def main():
         setattr(Params, key, value)
 
     run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "train_thinking" / run_name
+    Params.LOGGING_DIR =  config.RUN_DIR / "train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
-    model, tokenizer = train_thinking.load_model_tokenizer()
+    model_input_dir = config.MODEL_DIR / "all_sid_aligned_model"
+    model, tokenizer = merge_save_load_model.load_model(model_input_dir)
     old_vocab_size = 128_256
 
-    train_dataset = train_thinking.ReasoningDataset(tokenizer, "train")
-    eval_dataset = train_thinking.ReasoningDataset(tokenizer, "eval")
+    train_dataset = train_thinking.ReasoningDataset("train", "sft")
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft")
 
     
     train(model, tokenizer, train_dataset, eval_dataset, Params)
 
     
-    
-
 if __name__ == "__main__":
     main()
     if torch.distributed.is_initialized():

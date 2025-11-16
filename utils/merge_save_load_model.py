@@ -41,19 +41,16 @@ def merge_and_save_model(model_input_dir, adaptor_dir, checkpoint_dir, model_sav
     tokenizer.save_pretrained(model_save_dir)
 
 
-def load_merged_model(model_input_dir):
+def load_model(model_input_dir):
     model = AutoModelForCausalLM.from_pretrained(model_input_dir)
     tokenizer = AutoTokenizer.from_pretrained(model_input_dir)
+
+    model, tokenizer = setup_model(model, tokenizer)
 
     return model, tokenizer
 
 
-
-
-def load_model():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_SAVE_DIR)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_SAVE_DIR)
-
+def setup_model(model, tokenizer):
     model.config.vocab_size = len(tokenizer)
     model.config.pad_token_id = tokenizer.pad_token_id
     model.generation_config.pad_token_id = tokenizer.pad_token_id
@@ -68,7 +65,6 @@ def load_model():
     model.generation_config.bos_token_id = tokenizer.bos_token_id
 
     return model, tokenizer
-
 
 
 def main():

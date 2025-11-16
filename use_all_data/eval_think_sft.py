@@ -7,6 +7,7 @@ Results from devices are aggregated and print out the final global recall@k
 vLLM does not work with DDP, so don't use torchrun
 
 With Reasoning SFT, achieves this result
+Global Recall: {1: np.float64(0.021777042436166884), 5: np.float64(0.05330232974109019), 10: np.float64(0.0727541027590216)}
 Global Recall: {1: np.float64(0.02164289227742253), 5: np.float64(0.05213969503197245), 10: np.float64(0.0724858024415329)}
 """
 
@@ -32,7 +33,8 @@ def evaluate_sequence_recall_VLLM(
     top_k_list=[1, 5, 10],
 ):
     hits_dict = {k: [] for k in top_k_list}
-    sid_pattern = re.compile(r"<sid>(.*?)</sid>")
+    # sid_pattern = re.compile(r"<sid>(.*?)</sid>")
+    sid_pattern = re.compile(r"<sid>(.*?)<")
 
     for batch in tqdm(eval_loader, desc="Evaluating"):
         prompts = batch["prompt"]
@@ -124,12 +126,13 @@ def main():
     )
 
     # --- Prepare dataset ---
-    eval_dataset = train_thinking.SeqReasoningDataset(tokenizer, "eval")
+    eval_dataset = train_thinking.ReasoningDataset("eval", "raw_text_vllm")
     # eval_dataset = Subset(eval_dataset, range(32*8))
+    print(eval_dataset[0])
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=32,
-        num_workers=8,
+        num_workers=0,
         shuffle=False,
         collate_fn=collate_fn,
     )
@@ -159,4 +162,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # merge_splits()

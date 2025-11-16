@@ -47,3 +47,28 @@ def read_record(bagz_file):
     reader = bagz.Reader(bagz_file)
     records = [json.loads(record.decode("utf-8")) for record in reader]
     return records
+
+
+def save_record_list(record_list: dict, target_file):
+    """
+    Save multiple lists of fields into a bagz file as records.
+
+    Args:
+        target_file (str): path to output bagz file
+        field_lists (dict): keys are field names, values are lists of field values
+                            All lists must have the same length
+    """
+
+    # Check all lists are same length
+    lengths = [len(v) for v in record_list.values()]
+    if len(set(lengths)) != 1:
+        raise ValueError(f"All input lists must have same length, got lengths={lengths}")
+
+    num_records = lengths[0]
+
+    with bagz.Writer(target_file) as writer:
+        for i in range(num_records):
+            record = {field: record_list[field][i] for field in record_list}
+            writer.write(json.dumps(record).encode("utf-8"))
+
+

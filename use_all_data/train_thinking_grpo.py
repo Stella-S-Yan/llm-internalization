@@ -10,16 +10,22 @@ DDP using all GPUs available.
 $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "3"   # <-- must come before torch/vllm imports
+
 import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import argparse
 from use_all_data import train_thinking
-from utils import merge_save_model
+from utils import merge_save_load_model
 from trl import GRPOConfig, GRPOTrainer
 import random
 import re
+
+
+
 
 
 MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
@@ -70,7 +76,7 @@ def extract_hist_predictions(text):
     return preds
 
 
-def semantic_reward_fn(completions, prompts=None, **kwargs):
+def semantic_reward_fn(completions, **kwargs):
     """
     completions: list of dicts {"content": text_generated"}
     kwargs["solution"]: list of dicts per prompt with keys:
@@ -106,7 +112,7 @@ def semantic_reward_fn(completions, prompts=None, **kwargs):
         # --- 3. cat (medium bonus) ---
         cat_pred = extract_tag(complete, "cat")
         if cat_pred is not None and cat_pred == true_data.get("cat"):
-            r += 0.2
+            r += 0.3
 
         # --- 4. sid (dominant) ---
         sid_pred = extract_tag(complete, "sid")
@@ -137,8 +143,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         task_type="CAUSAL_LM",
         r=params.LORA_RANK,                      # rank
         lora_alpha=params.LORA_RANK * params.LORA_RATIO,
-        # target_modules=["q_proj", "v_proj"],  # attention projections
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=["q_proj", "v_proj"],  # attention projections
+        # target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         lora_dropout=params.LORA_DROPOUT,
         bias="none",
     )
@@ -147,11 +153,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
 
     peft_model.print_trainable_parameters()
 
-    # Freeze all base model parameters (done automatically by get_peft_model)
-    # for name, param in peft_model.named_parameters():
-    #     if "lora_" not in name:
-    #         param.requires_grad = False
-    
 
     # --- GRPO RL setup ---
     grpo_config = GRPOConfig(
@@ -163,19 +164,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         shuffle_dataset=True,
         num_generations=4,
         steps_per_generation=4,
-        max_completion_length=393,
-        # generation_kwargs={
-        #     "max_new_tokens": 393,
-        #     "do_sample": True,
-        #     "top_k": 50,
-        #     "top_p": 0.9,
-        #     "temperature": 0.7,
-        # },
+        max_completion_length=210,
+        # sample
+        top_k=100,
         # optimizer & scheduler
         optim="adamw_torch",          # supports 'adamw_torch', 'adamw_hf', 'adamw_apex', etc.
         lr_scheduler_type="linear",   # can use "cosine", "cosine_with_restarts", "polynomial", etc.
         warmup_steps=params.WARMUP_STEPS,            # optional, for scheduler
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=2,
         max_grad_norm=1.0,
         # max_steps=params.TOTAL_STEPS,
         logging_dir=params.LOGGING_DIR,
@@ -189,7 +185,10 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         logging_steps=10,
         use_vllm=True,
         vllm_mode="server",  # default value, can be omitted
-        vllm_server_base_url="http://0.0.0.0:8000"
+        vllm_server_base_url="http://0.0.0.0:8000",
+        sync_ref_model=True,
+        ref_model_mixup_alpha=0.6,  # default
+        ref_model_sync_steps=200
     )
 
     trainer = GRPOTrainer(
@@ -218,28 +217,28 @@ def main():
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
-    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default=' ', help="Adaptor save dir")
+    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='train_think_grpo_adaptor', help="Adaptor save dir")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_num_epocs{1}"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_num_epocs{1}"
     Params.LOGGING_DIR =  config.RUN_DIR / "train_think_grpo" / run_name
-    Params.ADAPTOR_SAVE_DIR = config.MODEL_DIR / "train_think_grpo/adaptor"
+    Params.ADAPTOR_SAVE_DIR = config.MODEL_DIR / "train_think_grpo_adaptor"
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
     # Load model + tokenizer
-    model_input_dir = config.MODEL_DIR / "think_model_best"
-    model, tokenizer = merge_save_model.load_merged_model(model_input_dir)
+    model_input_dir = config.MODEL_DIR / "think_model_sft"
+    model, tokenizer = merge_save_load_model.load_merged_model(model_input_dir)
     model.config.pad_token_id = tokenizer.pad_token_id
     old_vocab_size = 128_256
 
-    train_dataset = train_thinking.SeqReasoningDataset(tokenizer, "train")
-    eval_dataset = train_thinking.SeqReasoningDataset(tokenizer, "eval")
+    train_dataset = train_thinking.SeqReasoningDataset(tokenizer, "train", grpo=True)
+    eval_dataset = train_thinking.SeqReasoningDataset(tokenizer, "eval", grpo=True)
 
     train(model, tokenizer, train_dataset, eval_dataset, Params)
 

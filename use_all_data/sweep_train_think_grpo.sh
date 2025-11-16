@@ -2,7 +2,7 @@
 set +e
 
 # Start vLLM server first
-# $ trl vllm-serve --model think_model_best/ --dtype half
+# $ trl vllm-serve --model think_model_sft/ --dtype half
 
 # pick on good setting and explore more
 runs=(
@@ -13,7 +13,7 @@ runs=(
   # "--LR 6e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 8 --LORA_RATIO 2 --TOTAL_STEPS 50000 --LORA_DROPOUT 0.2 --ADAPTOR_SAVE_DIR train_thinking "
 
   # beta = 0.2
-  "--LR 5e-6 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 8 --LORA_RATIO 2 --TOTAL_STEPS 50000 --LORA_DROPOUT 0.2 --ADAPTOR_SAVE_DIR train_thinking "
+  "--LR 5e-6 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 800 --TRAIN_BATCH_SIZE 16 --LORA_RANK 8 --LORA_RATIO 4 --LORA_DROPOUT 0.2"
 
 )
 

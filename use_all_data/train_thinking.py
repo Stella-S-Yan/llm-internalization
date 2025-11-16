@@ -10,212 +10,60 @@ DDP using all GPUs available.
 $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
-import json
-import random
 import config
 import torch
-from peft import LoraConfig, get_peft_model, TaskType
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
-from transformers import TrainerCallback
+from transformers import Trainer, TrainerCallback
 import numpy as np
-import bagz
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
-import argparse
 from torch.utils.data import Subset
 import math
 from torch.optim.lr_scheduler import LambdaLR
-from utils import bagz_utils
 
 
 MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-
-class Params:
-    TRAIN_BATCH_SIZE = 16
-    LR = 4e-4
-    WEIGHT_DECAY = 1e-3
-    TOTAL_STEPS = 16_000    # 13_000
-
-    LORA_DROPOUT = 0.1     # turn to 0.3 leads to overfit, weirdly. 0.01 also overfits, 0.05 seems best
-    LORA_RANK = 16      # 16 large rank overfit early
-    LORA_RATIO = 1
-    WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
-
-
-PROMPT_TEMPLATE = """
-                User history:
-                user {uid}: {history}
-                Predict next semantic ID with reasoning:
-            """
-
-TARGET_TEMPLATE = """
-            <hsz>{history_len}</hsz>
-            <hist>
-                {sid_cat_list}
-            </hist>
-            <cat>{target_sid_cat}</cat>
-            <sid>{target_sid}</sid>
-            {eos}
-            """
-
-
-def load_model_tokenizer(model_input_dir):
-    model = AutoModelForCausalLM.from_pretrained(model_input_dir)
-    tokenizer = AutoTokenizer.from_pretrained(model_input_dir)
-
-    return model, tokenizer
-
-
-
 class ReasoningDataset(Dataset):
-    def __init__(self, tokenizer, split):
-        self.tokenizer = tokenizer
-        meta_df = bagz_utils.read_parquet(config.META_W_ALL_SID) 
-        # build mapping once
-        self.sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
+    def __init__(self, split, datatype: str):
+        self.datatype = datatype
 
-        if split == "train":
-            self.data_reader = bagz.Reader(config.TRAIN_DATA)
-        elif split == "eval":
-            self.data_reader = bagz.Reader(config.EVAL_DATA)
-        elif split == "test":
-            self.data_reader = bagz.Reader(config.TEST_DATA)
-
-        self.data = [json.loads(record.decode()) for record in self.data_reader]
+        self.data = torch.load(config.PROCESSED_DATA_DIR / f"think_data_{split}.pt")
+       
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         record = self.data[idx]
-        uid = record["uid"]
-        history = record["input"]
-        target = record["target"]
-
-        sids = history.split(';')
-        sids = [part.strip() for part in sids]
-        history_len = len(sids)
-
-        cats = [self.sid_to_cat.get(i) for i in sids]
-        sid_cat_list =  "\n".join(f"{i}: {cats[i]}" for i in range(len(sids)))
-        
-        target_sid_cat = self.sid_to_cat.get(target)
-
-        prompt = PROMPT_TEMPLATE.format(
-            uid=uid, 
-            history=history.strip()
-        ).strip()
-
-        result = TARGET_TEMPLATE.format(
-            history_len=str(history_len),
-            sid_cat_list=sid_cat_list,
-            target_sid_cat=target_sid_cat,
-            target_sid=target,
-            eos=self.tokenizer.eos_token
-            ).strip()
-
-        prompt_enc = self.tokenizer(
-            prompt,
-            add_special_tokens=False,
-            truncation=False,
-            padding=False
-        )
-
-        result_enc = self.tokenizer(
-            result,
-            add_special_tokens=False,
-            truncation=False,
-            padding=False
-        )
-
-        input_ids = prompt_enc["input_ids"] + result_enc["input_ids"]
-
-        # result starts immediately after prompt
-        result_start = len(prompt_enc["input_ids"])
-
-        # attention_mask = [1] * len(input_ids)
-        labels = [-100] * result_start + input_ids[result_start:]
-
-        return {
-            "input_ids": torch.tensor(input_ids),
-            "labels": torch.tensor(labels)
+        if self.datatype == "sft":
+            return {
+                "input_ids": record["input_ids"],
+                "labels": record["labels"]
             }
-
-
-class SeqReasoningDataset(Dataset):
-    def __init__(self, tokenizer, split):
-        self.tokenizer = tokenizer
-        
-        meta_df = bagz_utils.read_parquet(config.META_W_ALL_SID) 
-        # build mapping once
-        self.sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
-
-        if split == "train":
-            self.data_reader = bagz.Reader(config.TRAIN_DATA)
-        if split == "eval":
-            self.data_reader = bagz.Reader(config.EVAL_DATA)
-        elif split == "test":
-            self.data_reader = bagz.Reader(config.TEST_DATA)
-
-        # Convert all records in one shot
-        self.data = [json.loads(record.decode()) for record in self.data_reader]
-
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        record = self.data[idx]
-        uid = record["uid"]
-        history = record["input"]
-        target = record["target"]
-
-        sids = history.split(';')
-        sids = [part.strip() for part in sids]
-        history_len = len(sids)
-
-        cats = [self.sid_to_cat.get(i) for i in sids]
-        sid_cat_list =  "\n".join(f"{i}: {cats[i]}" for i in range(len(sids)))
-        
-        target_sid_cat = self.sid_to_cat.get(target)
-
-        prompt = PROMPT_TEMPLATE.format(
-            uid=uid, 
-            history=history.strip()
-        ).strip()
-
-        result = TARGET_TEMPLATE.format(
-            history_len=str(history_len),
-            sid_cat_list=sid_cat_list,
-            target_sid_cat=target_sid_cat,
-            target_sid=target,
-            eos=self.tokenizer.eos_token
-            ).strip()
-
-        prompt_enc = self.tokenizer(
-            prompt,
-            add_special_tokens=False,
-            truncation=False,
-            padding=False
-        )
-
-        solution = {
-            "hsz": history_len,
-            "hist": cats,
-            "cat": target_sid_cat,
-            "sid": target,
-        }
-        
-        
-        return {
-            "prompt": {"prompt": prompt, "prompt_token_ids": prompt_enc["input_ids"]},
-            "target": result,
-            "solution": solution,
-        }
+        elif self.datatype == "grpo":
+            return {
+                "prompt": record["prompt"],
+                "solution": record["solution"],
+            }
+        elif self.datatype == "raw_text_vllm":  # used for vLLM-based thinking_sft model evaluation
+            return {
+                "prompt": {"prompt": record["prompt"], "prompt_token_ids": record["prompt_token_ids"].tolist()},
+                "target": record["target"],
+                "solution": record["solution"],
+            }
+        elif self.datatype == "raw_text":
+            return {
+                "prompt_token_ids": record["prompt_token_ids"],
+                "target": record["target"],
+            }
+        else:
+            raise ValueError(
+                f"Invalid datatype '{self.datatype}'. "
+                f"Expected one of: ['sft', 'grpo', 'raw_text', 'raw_text_vllm']"
+            )
 
 
 def sft_data_collator(batch, tokenizer):
@@ -225,12 +73,21 @@ def sft_data_collator(batch, tokenizer):
     - labels padded with -100 (so prompts are ignored)
     Returns attention_mask automatically.
     """
-    input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
-    labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
+    input_ids = [f["input_ids"] for f in batch]
+    labels = [f["labels"] for f in batch]
 
     # pad sequences to the max length in the batch
-    input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id, padding_side="left")  
-    labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-100, padding_side="left")
+    input_ids = torch.nn.utils.rnn.pad_sequence(
+        input_ids, 
+        batch_first=True, 
+        padding_value=tokenizer.pad_token_id, 
+        padding_side="left"
+        )  
+    labels = torch.nn.utils.rnn.pad_sequence(
+        labels, 
+        batch_first=True, 
+        padding_value=-100, 
+        padding_side="left")
 
 
     attention_mask = (input_ids != tokenizer.pad_token_id).long()
