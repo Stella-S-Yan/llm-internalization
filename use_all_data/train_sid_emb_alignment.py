@@ -21,9 +21,9 @@ from torch.utils.tensorboard import SummaryWriter
 import random
 import os
 import itertools
-from transformers import get_cosine_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
 
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -31,16 +31,18 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
-BATCH_SIZE = 1024
-TOTAL_STEPS = 12_000     # plateau at epoch 2k
-LR =  2e-3         #  1e-3 best, but then overfit 
+BATCH_SIZE = 4096
+TOTAL_STEPS = 10_000     # plateau at epoch 2k
+LR =  4e-3         #  1e-3 best, but then overfit 
 TEMP = 0.1     # high temperature: smoother distribution, softer gradients
 SCALE = 0.01    # Best
-WARMUP_UP = 400
+WARMUP_UP = 200
+POLY_POW = 2.0
+POLY_END_LR = 1e-6
 
 
 # Create an informative run name
-RUN_NAME = f"{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_cosine"
+RUN_NAME = f"3rdnew_poly{POLY_POW}_endlr_{POLY_END_LR}_{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
 
 
 def load_model_tokenizer(run_test: False):
@@ -260,10 +262,22 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     emb.weight.requires_grad = True
 
     optimizer = torch.optim.Adam([emb.weight], lr=LR)
-    scheduler = get_cosine_schedule_with_warmup(
+    # scheduler = get_cosine_schedule_with_warmup(
+    #     optimizer,
+    #     num_warmup_steps=WARMUP_UP,
+    #     num_training_steps=TOTAL_STEPS,  # short warmup then flat
+    # )
+    # scheduler = get_inverse_sqrt_schedule(
+    #     optimizer,
+    #     num_warmup_steps=WARMUP_UP,   # same warmup you used before
+    #     timescale=None               # optional; defaults to warmup steps
+    # )
+    scheduler = get_polynomial_decay_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=WARMUP_UP,
-        num_training_steps=TOTAL_STEPS,  # short warmup then flat
+        num_warmup_steps=WARMUP_UP,         # e.g., 500 steps
+        num_training_steps=TOTAL_STEPS,     # total steps in your training
+        lr_end=POLY_END_LR,                        # final LR
+        power=POLY_POW                            # polynomial power (>1 for faster early decay)
     )
 
     model.to(DEVICE)
@@ -285,7 +299,11 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     data_iter = itertools.cycle(dataloader)  # infinite iterator over dataloader
 
     for global_step in range(TOTAL_STEPS):
-        # if global_step == 400:
+        # if global_step == 500:
+        #     for g in optimizer.param_groups:
+        #         g["lr"] *= SCALE
+        
+        # if global_step == 1200:
         #     for g in optimizer.param_groups:
         #         g["lr"] *= SCALE
 
@@ -333,6 +351,10 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad()
+
+        # log LR
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar("train/lr", current_lr, global_step)
 
         # Evaluation
         if global_step > 0 and global_step % 50 == 0:
