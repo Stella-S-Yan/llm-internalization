@@ -2,12 +2,15 @@
 Tune the embeddings of the new vocabulary, such that the embedding of a sid is closer to the embedding
 of its text description.
 
-Difficult to make it DDP. Just keep the current single GPU version
-
 Have very few trainable parameters (1024 * hidden_dim). 
 The objective (contrastive loss) is smooth and well-behaved. 
 The model's other weights are frozen, so the optimization surface doesn't shift. 
 So a complex LR schedul is not necessary, but a gental warmup and/or decay can still help stabilize early updates and avoid overshooting
+
+
+Difficult to make it DDP. Just keep the current single GPU version
+Set CUDA_VISIBLE_DEVICES and run
+$ python train_sid_emb_alignment.py
 """
 
 
@@ -22,27 +25,39 @@ import random
 import os
 import itertools
 from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
+import numpy as np
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Set seeds for reproducibility
+seed = 411
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+np.random.seed(seed)
+random.seed(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / "all_sid_aligned_model"
-LOG_DIR = config.RUN_DIR / "all_sid_alignment"
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
+LOG_DIR = config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 BATCH_SIZE = 4096
-TOTAL_STEPS = 10_000     # plateau at epoch 2k
+TOTAL_STEPS = 20_000     # plateau at step 2k
 LR =  4e-3         #  1e-3 best, but then overfit 
 TEMP = 0.1     # high temperature: smoother distribution, softer gradients
+
 SCALE = 0.01    # Best
 WARMUP_UP = 200
 POLY_POW = 2.0
-POLY_END_LR = 1e-6
+POLY_END_LR = 1e-7  # better than 1e-6 for Toys_and_Games
 
 
 # Create an informative run name
-RUN_NAME = f"3rdnew_poly{POLY_POW}_endlr_{POLY_END_LR}_{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
+RUN_NAME = f"poly{POLY_POW}_endlr_{POLY_END_LR}_{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
 
 
 def load_model_tokenizer(run_test: False):
