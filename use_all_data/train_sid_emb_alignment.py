@@ -27,7 +27,7 @@ import itertools
 from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
 import numpy as np
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -46,7 +46,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 LOG_DIR = config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 BATCH_SIZE = 4096
-TOTAL_STEPS = 15_000     # plateau at step 2k
+TOTAL_STEPS = 20_000     # plateau at step 2k
 LR =  4e-3         #  1e-3 best, but then overfit 
 TEMP = 0.1     # high temperature: smoother distribution, softer gradients
 
@@ -237,7 +237,7 @@ def save_model(model, tokenizer, old_vocab_size):
 
 
 
-def load_checkpoint(base_model_name, save_dir, device=None):
+def load_checkpoint(base_model_name, save_dir):
     # Load BASE MODEL again — quantized or FP16 as desired
     model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
@@ -252,11 +252,6 @@ def load_checkpoint(base_model_name, save_dir, device=None):
 
     # 3. Resize embedding table
     model.resize_token_embeddings(new_vocab_size)
-
-    # Load embeddings to the correct device
-    if device is None:
-        device = torch.device("cuda:0")
-    model.to(device)
 
     # 4. Load saved new embedding weights
     new_emb = torch.load(os.path.join(save_dir, "new_embeddings.pt")).to(model.device)
