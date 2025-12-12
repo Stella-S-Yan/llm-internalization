@@ -36,7 +36,7 @@ def run_on_gpu(gpu_id, df_split):
 
     df_split = embed_col(model, tokenizer, df_split, "formatted_text", "llama_embedding", device)
 
-    fname = config.META_W_ALL_TWO_EMB
+    fname = config.META_TWO_EMB
     bagz_utils.save_parquet(df_split,  f"{fname}_{gpu_id}")
     print(f"[GPU {gpu_id}] Finished. Saved to {fname}_{gpu_id}")
 
@@ -87,7 +87,7 @@ def get_embedding_last_token(texts, model, tokenizer, device, normalize=True):
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=512
+        max_length=1024
     )
     input_ids = inputs["input_ids"].to(device)
     attention_mask = inputs["attention_mask"].to(device)
@@ -132,8 +132,7 @@ def embed_col(model, tokenizer, df, col_name, new_col_name, device, batch_size=2
 
 def gen_embedding():
 
-    fname = config.META_W_ALL_EMBEDDING
-    df = bagz_utils.read_parquet(fname)
+    df = bagz_utils.read_parquet(config.META_OUTSIDE_EMB)
 
     n_gpus = torch.cuda.device_count()
     splits = np.array_split(df, n_gpus)
