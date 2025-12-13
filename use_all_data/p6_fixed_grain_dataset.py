@@ -41,22 +41,24 @@ class GenFixedData():
 
         # Test
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        inp_seq_d, target_seq_d = self._make_data_point(sid_seq)
+        # sid_seq = sid_seq[-config.MAX_EVAL_LEN:]
+        input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.test_data.append( {
                 "uid": uid,
-                "input": inp_seq_d,
-                "target": target_seq_d
+                "input": input_seq_d,
+                "target": target_seq_d,
                 }
         )
 
         # Eval
         sid_seq = record["sequence"][:-1]
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        inp_seq_d, target_seq_d = self._make_data_point(sid_seq)
+        # sid_seq = sid_seq[-config.MAX_EVAL_LEN:]
+        input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.eval_data.append( {
                 "uid": uid,
-                "input": inp_seq_d,
-                "target": target_seq_d
+                "input": input_seq_d,
+                "target": target_seq_d,
                 }
         )
 
@@ -86,13 +88,13 @@ class GenFixedData():
         del reviewerID
         res = []
         for seq in sub_seqs:
-            inp_seq_d, target_seq_d = self._make_data_point(seq)
-            if inp_seq_d is not None:
+            input_seq_d, target_seq_d = self._make_data_point(seq)
+            if input_seq_d is not None:
                 res.append(
                     {   
                         "uid": uid,
-                        "input": inp_seq_d, 
-                        "target": target_seq_d
+                        "input": input_seq_d, 
+                        "target": target_seq_d,
                     }
                 )
         return res
@@ -103,7 +105,7 @@ class GenFixedData():
         n = len(seq)
         for start in range(n):
             # end index goes from start+2 to start+max_seq_len (inclusive), but not beyond sequence length
-            for end in range(start + 2, min(n, start + config.MAX_HISTORY_LEN) + 1):
+            for end in range(start + config.MIN_HISTORY_LEN, min(n, start + config.MAX_HISTORY_LEN) + 1):
                 subsequences.append(seq[start:end])
         return subsequences
 
@@ -112,12 +114,12 @@ class GenFixedData():
         target = seq[-1]
         input = seq[:-1]
 
-        inp_seq_str = '; '.join(
+        input_seq_str = ' '.join(
             item if isinstance(item, str) else ' '.join(item)
             for item in input
         )
 
-        return inp_seq_str, target
+        return input_seq_str, target
 
 
 def generate_fixed_split_data():

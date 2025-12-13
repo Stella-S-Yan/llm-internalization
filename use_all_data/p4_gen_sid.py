@@ -63,6 +63,13 @@ def gen_sid():
         all_df.append(meta_df)
         
     all_df = pd.concat(all_df, ignore_index=True)
+
+    # Mark if in review_df
+    review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)
+    num_users = review_df["reviewerID"].nunique()
+    print(f"---Users: {num_users}")
+    all_df["has_review"] = all_df["asin"].isin(review_df["asin"]).astype(int)
+
     save_file_name = config.META_W_ALL_SID
     logger.info(f"Total rows: {all_df.shape[0]}")
     _process_df(model, all_df, save_file_name)

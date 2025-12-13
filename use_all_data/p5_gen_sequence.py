@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_preprocessing():
-    meta_df = bagz_utils.read_parquet(config.META_W_ALL_SID) 
+    meta_df = bagz_utils.read_parquet(config.META_ALL_SID) 
     logger.info(meta_df.head(3))
 
     review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)
@@ -19,6 +19,9 @@ def run_preprocessing():
     sorted_df = merged_df.sort_values(by=['reviewerID', 'unixReviewTime'])
     num_items = sorted_df['asin'].nunique()
     logger.debug(f"---Items: {num_items}")
+
+    # Extract prefix: first 3 SID tokens
+    # sorted_df["sid_prefix_lst"] = sorted_df["formatted_sid"].str.split().str[:3]
 
     # Aggregate both formatted_sid and asin sequences
     user_sequences = sorted_df.groupby('reviewerID').agg({

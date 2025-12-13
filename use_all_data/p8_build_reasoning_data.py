@@ -122,8 +122,8 @@ def main():
 
     do_the_work(tokenizer, "train")
     do_the_work(tokenizer, "eval")
-    do_the_work(tokenizer, "test")
-    do_the_work(tokenizer, "train_eval")
+    # do_the_work(tokenizer, "test")
+    # do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":
     main()

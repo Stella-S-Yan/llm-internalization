@@ -7,7 +7,7 @@ Able to achieve 4.97% recall@5
 
 DDP using all GPUs available.
 # Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
+$ torchrun --nproc_per_node=8 train_thinking_sft.py
 """
 
 import config
@@ -16,11 +16,23 @@ from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import argparse
 from use_all_data import train_thinking
-from utils import merge_save_load_model
-
+import numpy as np
+import random
+import os
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# Set seeds for reproducibility
+seed = 411
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+np.random.seed(seed)
+random.seed(seed)
+# torch.backends.cudnn.deterministic = True # Force CuDNN to use only deterministic algorithms
+# torch.backends.cudnn.benchmark = False    # Disable CuDNN's autotuner that tries to pick the fastest algorithm for input sizes
 
 
 
@@ -37,13 +49,43 @@ class Params:
     ADAPTOR_SAVE_DIR = ''
 
 
+def load_checkpoint(base_model_name, save_dir):
+    # Load BASE MODEL again — quantized or FP16 as desired
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        dtype=torch.bfloat16,   # or fp16, or load_in_4bit=True
+    )
+
+    # 2. Load extended tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(save_dir)
+
+    old_vocab_size = model.get_input_embeddings().weight.shape[0]
+    new_vocab_size = len(tokenizer)
+
+    # 3. Resize embedding table
+    model.resize_token_embeddings(new_vocab_size)
+
+    # 4. Load saved new embedding weights
+    new_emb = torch.load(os.path.join(save_dir, "new_embeddings.pt")).to(model.device)
+    print(f"new_emb device: {model.device}")
+
+    # 5. Insert the new embeddings back into the table
+    with torch.no_grad():
+        model.get_input_embeddings().weight[old_vocab_size:] = new_emb
+
+    print(f"Restored model with extended vocab ({new_vocab_size} tokens)")
+
+    return model, tokenizer
+
+
+
 def train(model, tokenizer, train_dataset, eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=config.MODEL_DIR / params.ADAPTOR_SAVE_DIR,
+        output_dir=config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_{params.ADAPTOR_SAVE_DIR}",
         logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=1,
@@ -112,7 +154,7 @@ def main():
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
-    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='train_thinking_sft', help="Where to save the trained adaptor")
+    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='think_sft_adaptor', help="Where to save the trained adaptor")
 
     args = parser.parse_args()
 
@@ -120,13 +162,17 @@ def main():
         setattr(Params, key, value)
 
     run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "train_thinking_sft" / run_name
+    Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
-    model_input_dir = config.MODEL_DIR / "all_sid_aligned_model"
-    model, tokenizer = merge_save_load_model.load_model(model_input_dir)
+    # Load model and tokenizer in local device
+    base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    save_dir = MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
+    # Load model to cpu first and let torchrun handle the device placement
+    model, tokenizer = load_checkpoint(base_model_name, save_dir) 
+    print(f"model_device: {model.device}")
     old_vocab_size = 128_256
 
     train_dataset = train_thinking.ReasoningDataset("train", "sft")

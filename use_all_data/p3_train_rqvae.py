@@ -78,23 +78,26 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
     plt.clf()
 
 
-def get_data():
+def get_data(use_all_data=False):
     df_all = []
     for group_id in range(8):
         print(f"get file {config.META_W_ALL_TWO_EMB}_{group_id}")
         df = bagz_utils.read_parquet(f"{config.META_W_ALL_TWO_EMB}_{group_id}")
         df_all.append(df)
     meta_df = pd.concat(df_all, ignore_index=True)
-
     print("All data shape: ", meta_df.shape)
+    
+    review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)
+    num_users = review_df["reviewerID"].nunique()
+    print(f"---Users: {num_users}")
+    meta_df["has_review"] = meta_df["asin"].isin(review_df["asin"]).astype(int)
 
-    # Drop rows with no description
-    drop_cnt = meta_df['description'].isnull().sum()
-    print(f"To drop {drop_cnt} rows with no description, which is {drop_cnt/meta_df.shape[0]:.2%} of total")
-    meta_df = meta_df.dropna(subset=['description'])
-    print("After dropping no description: ", meta_df.shape)
-
-    raw_item_embeddings = meta_df['embedding'].tolist()
+    if use_all_data:
+        print("---Use all embeddings.")
+        raw_item_embeddings = meta_df['embedding']
+    else: # Use only items in the review_df
+        print("---Only reviewed embeddings.")
+        raw_item_embeddings = meta_df.loc[meta_df["has_review"]==1]["embedding"]
     
     # Ensure all arrays are writable
     raw_item_embeddings = [np.array(emb, dtype=np.float32, copy=True) for emb in raw_item_embeddings]
@@ -102,48 +105,18 @@ def get_data():
     return raw_item_embeddings
 
 
-def dedupe(raw_item_embeddings):
-    # Sbert embeddings are normalized, so inner product = cosine similarity
-    emb = np.array(raw_item_embeddings, dtype=np.float32)
-    N, D = emb.shape
-
-    # Build HNSW index
-    index = faiss.IndexHNSWFlat(D, 32)  # 32 = M (neighbors per node), graph-connectivity parameter
-    index.hnsw.efConstruction = 40       # tradeoff: speed vs accuracy, graph building search breadth
-    index.add(emb)
-
-    # Search neighbors efficiently
-    threshold = 0.9
-    k = 10  # max neighbors per point
-    distances, indices = index.search(emb, k)
-
-    keep_mask = np.ones(N, dtype=bool)
-
-    for i, neighbors in enumerate(indices):
-        if not keep_mask[i]:
-            continue
-        for j, neighbor in enumerate(neighbors[1:]):  # skip self
-            if distances[i, j+1] >= threshold:
-                keep_mask[neighbor] = False
-
-    filtered_embeddings = emb[keep_mask]
-    print(f"Kept {len(filtered_embeddings)} out of {N} embeddings. pct: {len(filtered_embeddings)/N:.2%}")
-
-    return filtered_embeddings
-
 
 def train():
     os.makedirs(config.MODEL_DIR, exist_ok=True)
     checkpoint_dir=config.ALL_RQVAE_CHECKPOINT_DIR
 
     # Load data on cpu only
-    raw_item_embeddings = get_data()    # Returns a NumPy array (keep on CPU)
+    raw_item_embeddings = get_data(use_all_data=False)    # Returns a NumPy array (keep on CPU)
     raw_item_embeddings = np.array(raw_item_embeddings, dtype=np.float32)
 
-    filtered_embeddings = dedupe(raw_item_embeddings)
 
     # Measure data variance on cpu
-    data_variance = np.mean(np.var(filtered_embeddings, axis=0)).item()
+    data_variance = np.mean(np.var(raw_item_embeddings, axis=0)).item()
     logger.info(f"Data variance: {data_variance:.6f}")
 
     # Prepare dataset on cpu
@@ -151,7 +124,7 @@ def train():
     batch_size = 2048
     dataset = (
         tf.data.Dataset.from_tensor_slices(raw_item_embeddings)
-        .shuffle(buffer_size=10000,
+        .shuffle(buffer_size=len(raw_item_embeddings),
                  reshuffle_each_iteration=True,
                  seed=seed)
         .batch(batch_size)
@@ -166,8 +139,8 @@ def train():
         },
         "learning_rate_schedule": {
             "init_value": 0.0,
-            "peak_value": 1e-4,  # 1e-3 is jumpy for sports
-            "end_value": 1e-6,
+            "peak_value": 1e-3,  
+            "end_value": 1e-5,
         },
         "optimizer": {
             "type": "adamw",  # or "adagrad"

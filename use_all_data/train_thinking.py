@@ -22,15 +22,13 @@ import math
 from torch.optim.lr_scheduler import LambdaLR
 
 
-MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 
 class ReasoningDataset(Dataset):
     def __init__(self, split, datatype: str):
         self.datatype = datatype
 
-        self.data = torch.load(config.PROCESSED_DATA_DIR / f"think_data_{split}.pt")
+        self.data = torch.load(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_data_{split}.pt')
+        # self.data = self.data[:128]
        
 
     def __len__(self):

@@ -42,7 +42,8 @@ def merge_and_save_model(model_input_dir, adaptor_dir, checkpoint_dir, model_sav
 
 
 def load_model(model_input_dir):
-    model = AutoModelForCausalLM.from_pretrained(model_input_dir)
+    model = AutoModelForCausalLM.from_pretrained(model_input_dir, attn_implementation="flash_attention_2")
+    # model = AutoModelForCausalLM.from_pretrained(model_input_dir)
     tokenizer = AutoTokenizer.from_pretrained(model_input_dir)
 
     model, tokenizer = setup_model(model, tokenizer)

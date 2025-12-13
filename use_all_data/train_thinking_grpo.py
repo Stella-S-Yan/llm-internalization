@@ -1,36 +1,26 @@
 """
-Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
+Tune think-sft with grpo. 
 
-Able to achieve 4.97% recall@5
-
-
-
-DDP using all GPUs available.
-# Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
+To run this script, first start a vLLM server. Install $ pip install trl[vllm]
+# go to the parent directory of think_model_sft
+$ trl vllm-serve --model think_model_sft
+# run the script
+$ sh sweep_train_think_grop.sh
 """
 
 # import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "3"   # <-- must come before torch/vllm imports
+# os.environ["CUDA_VISIBLE_DEVICES"] = "5"   # <-- must come before torch/vllm imports
 
 import config
 import torch
-from peft import LoraConfig, get_peft_model, TaskType
-from transformers import TrainingArguments, Trainer
+from peft import LoraConfig, get_peft_model
 import argparse
 from use_all_data import train_thinking
 from utils import merge_save_load_model
 from trl import GRPOConfig, GRPOTrainer
-import random
 import re
-
-
-
-
-
-MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
+from typing import List
+import numpy as np
 
 
 class Params:
@@ -58,63 +48,107 @@ def extract_tag(text, tag):
     return m.group(1).strip() if m else None
 
 
-def extract_hist_predictions(text):
+def extract_hist_predictions(text: str) -> List[str]:
     """
-    Extracts only the predicted category part after '->'.
-    Returns a list of strings like:
-        ["Oils", "Oils & Serums", "Masks", ...]
+    Extract predicted category strings from <hist> lines like:
+       "0: Face", "1: Chemical Hair Dyes", ...
+    Also appends the content of <cat> if present.
+    Returns e.g. ["Face", "Chemical Hair Dyes", "Treatments & Masks", "Sets & Kits"]
     """
-    hist_text = extract_tag(text, "hist")
-    if not hist_text:
-        return []
-
     preds = []
-    for line in hist_text.splitlines():
-        m = HIST_LINE_REGEX.search(line)
-        if m:
-            preds.append(m.group(1).strip())
+
+    # 1) Get hist content, split into real lines, handle different whitespace quirks
+    hist_text = extract_tag(text, "hist")
+    if hist_text:
+        # Ensure we have real line breaks; if the content uses escaped '\n', fix that:
+        # (only do this if you actually see backslash-n sequences in your strings)
+        if r'\n' in hist_text and '\n' not in hist_text:
+            hist_text = hist_text.replace(r'\n', '\n')
+
+        for line in hist_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Prefer regex capture (robust to spaces)
+            m = HIST_LINE_REGEX.search(line)
+            if m:
+                preds.append(m.group(1).strip())
+                continue
+            # Fallback: split on first ':' and take the right side
+            if ':' in line:
+                _, right = line.split(':', 1)
+                preds.append(right.strip())
+            else:
+                # If no colon, assume the whole line is the label
+                preds.append(line)
+
+    # 2) Append the <cat> content if present (user expects this as last element)
+    cat_text = extract_tag(text, "cat")
+    if cat_text:
+        preds.append(cat_text.strip())
+
     return preds
 
 
-def semantic_reward_fn(completions, **kwargs):
-    """
-    completions: list of dicts {"content": text_generated"}
-    kwargs["solution"]: list of dicts per prompt with keys:
-        "hsz": int
-        "hist": list of categories
-        "cat": str
-        "sid": str
-    Returns: list of reward floats, one per completion
-    """
+def hsz_reward(completions, **kwargs):
     rewards = []
-
     solutions = kwargs.get("solution", [])
     for i, complete in enumerate(completions):
         true_data = solutions[i] if i < len(solutions) else {}
-        r = 0.0
 
-        # --- 1. hsz (small bonus) ---
+        # --- hsz (small bonus) ---
         hsz_pred = extract_tag(complete, "hsz")
         try:
             hsz_pred = int(hsz_pred)
             if hsz_pred == true_data.get("hsz"):
-                r += 0.1
+                rewards.append(1.0)
+            else:
+                rewards.append(0.0)
         except (TypeError, ValueError):
-            pass  # skip if None or not int
+            rewards.append(0.0)
 
-        # --- 2. hist (small bonus) ---
+    return rewards
+
+
+def hist_reward(completions, **kwargs):
+    rewards = []
+    solutions = kwargs.get("solution", [])
+    for i, complete in enumerate(completions):
+        true_data = solutions[i] if i < len(solutions) else {}
+
         hist_pred = extract_hist_predictions(complete) or []
         true_hist = true_data.get("hist") or []
         matches = sum(p == t for p, t in zip(hist_pred, true_hist))
         if len(true_hist) > 0:
-            r += 0.2 * matches / len(true_hist)
+            rewards.append(matches / len(true_hist))
+        else:
+            rewards.append(0.0)
 
-        # --- 3. cat (medium bonus) ---
+    return rewards
+
+
+def cat_reward(completions, **kwargs):
+    rewards = []
+    solutions = kwargs.get("solution", [])
+    for i, complete in enumerate(completions):
+        true_data = solutions[i] if i < len(solutions) else {}
+
+        # cat (medium bonus) ---
         cat_pred = extract_tag(complete, "cat")
         if cat_pred is not None and cat_pred == true_data.get("cat"):
-            r += 0.3
+            rewards.append(1.0)
+        else:
+            rewards.append(0.0)
 
-        # --- 4. sid (dominant) ---
+    return rewards
+
+
+def hierarchy_reward(completions, **kwargs):
+    rewards = []
+    solutions = kwargs.get("solution", [])
+    for i, complete in enumerate(completions):
+        true_data = solutions[i] if i < len(solutions) else {}
+
         sid_pred = extract_tag(complete, "sid")
         true_sid = true_data.get("sid")
         if sid_pred is not None and true_sid is not None:
@@ -126,17 +160,27 @@ def semantic_reward_fn(completions, **kwargs):
                     match_len += 1
                 else:
                     break
-            if len(true_tokens) > 0:
-                r += 1.0 * (match_len / len(true_tokens))
-        # If sid_pred or true_sid is None, just skip / reward nothing
-
-        rewards.append(r)
+            if true_tokens:
+                rewards.append(match_len / len(true_tokens))
+            else:
+                rewards.append(0.0)
+        else:
+            rewards.append(0.0)
 
     return rewards
 
 
+def weighted_reward(completions, **kwargs):
 
-def train(model, tokenizer, train_dataset, eval_dataset, params):
+    hist = np.array(hist_reward(completions, **kwargs))
+    cat = np.array(cat_reward(completions, **kwargs))
+    hier = np.array(hierarchy_reward(completions, **kwargs))
+
+    total = 1.0 * hist + 2.0 * cat + 3.0 * hier
+    return total.tolist()
+    
+
+def train(model, tokenizer, train_dataset, params):
     
     # Define LoRA config
     lora_config = LoraConfig(
@@ -160,32 +204,39 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         learning_rate=params.LR,
         beta=0.2, # KL coefficient
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
+        use_vllm=True,
+        vllm_mode="server",  # default value, can be omitted
+        vllm_server_base_url="http://0.0.0.0:8000",
         gradient_checkpointing=True,
         shuffle_dataset=True,
-        num_generations=4,
-        steps_per_generation=4,
+        gradient_accumulation_steps=4,
+        num_train_epochs=1,
+        bf16=True, 
+
+        # Parameters that control the data preprocessing
+        num_generations=8,
+        steps_per_generation=1,     # 2~4 for small dataset (few thousand prompts)
+        max_prompt_length=188, 
         max_completion_length=210,
+
         # sample
-        top_k=100,
+        top_k=50,
+        
         # optimizer & scheduler
         optim="adamw_torch",          # supports 'adamw_torch', 'adamw_hf', 'adamw_apex', etc.
         lr_scheduler_type="linear",   # can use "cosine", "cosine_with_restarts", "polynomial", etc.
         warmup_steps=params.WARMUP_STEPS,            # optional, for scheduler
-        gradient_accumulation_steps=2,
-        max_grad_norm=1.0,
-        # max_steps=params.TOTAL_STEPS,
+        
+        # max_grad_norm=1.0,
         logging_dir=params.LOGGING_DIR,
         save_strategy="steps",
         save_steps=10,
+        logging_steps=10,
         # eval_strategy="steps",
         # eval_steps=50,
-        bf16=True, 
+        
         report_to="tensorboard",
-        num_train_epochs=1,
-        logging_steps=10,
-        use_vllm=True,
-        vllm_mode="server",  # default value, can be omitted
-        vllm_server_base_url="http://0.0.0.0:8000",
+        
         sync_ref_model=True,
         ref_model_mixup_alpha=0.6,  # default
         ref_model_sync_steps=200
@@ -193,11 +244,11 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
 
     trainer = GRPOTrainer(
         model=peft_model,
-        processing_class=tokenizer,
+        reward_funcs=weighted_reward,
         args=grpo_config,
         train_dataset=train_dataset,
         # eval_dataset=eval_dataset,
-        reward_funcs=semantic_reward_fn,
+        
     )
 
     trainer.train()
@@ -233,14 +284,14 @@ def main():
 
     # Load model + tokenizer
     model_input_dir = config.MODEL_DIR / "think_model_sft"
-    model, tokenizer = merge_save_load_model.load_merged_model(model_input_dir)
-    model.config.pad_token_id = tokenizer.pad_token_id
+    model, tokenizer = merge_save_load_model.load_model(model_input_dir)
     old_vocab_size = 128_256
 
-    train_dataset = train_thinking.SeqReasoningDataset(tokenizer, "train", grpo=True)
-    eval_dataset = train_thinking.SeqReasoningDataset(tokenizer, "eval", grpo=True)
+    train_dataset = train_thinking.ReasoningDataset("train", "grpo")
+    # eval_dataset = train_thinking.ReasoningDataset("eval", "grpo")
 
-    train(model, tokenizer, train_dataset, eval_dataset, Params)
+    train(model, tokenizer, train_dataset, Params)
+    # train(model, tokenizer, eval_dataset, Params)
 
     
     

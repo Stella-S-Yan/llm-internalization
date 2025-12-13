@@ -128,6 +128,7 @@ model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_merge
 model = AutoModelForCausalLM.from_pretrained(
     model_dir,
     torch_dtype=torch.bfloat16,
+    # dtype=torch.float32,
 )
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 model = model.to(device)
@@ -136,6 +137,7 @@ if dist.is_initialized():
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
 gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset("eval")
+# gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset("test")
 
 if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
     rank = torch.distributed.get_rank()

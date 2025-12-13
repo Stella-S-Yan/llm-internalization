@@ -6,40 +6,23 @@ Results from devices are aggregated and print out the final global recall@k
 
 vLLM does not work with DDP, so don't use torchrun
 vLLM is used as a python kernel, and one is initiated for each gpu. To launch the script
-$ python eval_think_sft.py
+$ python eval_think_grpo.py
 
-With Reasoning SFT, achieves this result
-Beauty:
-Global Recall: {1: np.float64(0.021777042436166884), 5: np.float64(0.05330232974109019), 10: np.float64(0.0727541027590216)}
-Global Recall: {1: np.float64(0.02164289227742253), 5: np.float64(0.05213969503197245), 10: np.float64(0.0724858024415329)}
-
-Toy:
-Global Recall: {1: np.float64(0.01859674428188749), 5: np.float64(0.04435400783020812), 10: np.float64(0.06192046157016279)}
-sample 1024
-Global Recall: {1: np.float64(0.017578125), 5: np.float64(0.052734375), 10: np.float64(0.072265625)}
-400
-Global Recall: {1: np.float64(0.015), 5: np.float64(0.055), 10: np.float64(0.0675)}
+Global Recall: {1: np.float64(0.022045342753655592), 5: np.float64(0.05227384519071681), 10: np.float64(0.07078656709743773)}
 """
 
-# spawn creates a fresh Python process instead of forking.
-# Each worker safely initializes CUDA independently.
-# This is exactly what vLLM expects on multi-GPU setups.
-
-import multiprocessing
-multiprocessing.set_start_method("spawn", force=True)
-
-# Needs to import vllm before torch
-from vllm import LLM
-from vllm.sampling_params import BeamSearchParams
 import torch
 from tqdm import tqdm
 import config
 from use_all_data import train_thinking
 from torch.utils.data import DataLoader, Subset
 import re
+import os
+from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
+from vllm.sampling_params import BeamSearchParams
 import numpy as np
 import random
-
 
 
 @torch.no_grad()
@@ -132,28 +115,27 @@ def collate_fn(batch):
 
 def main():
     # --- assign devices via vLLM ---
-    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_merged_think_sft_model"
+    model_dir = config.MODEL_DIR / "think_model_grpo"
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
     # --- Load vLLM engine on all GPUs ---
     llm = LLM(
         model=str(model_dir),
         tokenizer=str(model_dir),
         tensor_parallel_size=8,     # use all 8 GPUs
-        gpu_memory_utilization=0.90,
-        dtype="float32"  # use float32 temporarily
+        gpu_memory_utilization=0.90
     )
 
     # --- Prepare dataset ---
     eval_dataset = train_thinking.ReasoningDataset("eval", "raw_text_vllm")
-    # eval_dataset = Subset(eval_dataset, range(32*8))
-    print(eval_dataset[0])
 
     # ---- Use random samples to reduce evaluation time ----
-    num_samples = 400 #1024
+    num_samples = 1024
     total = len(eval_dataset)
     subset_indices = random.sample(range(total), num_samples)
     eval_dataset = Subset(eval_dataset, subset_indices)
 
+    print(eval_dataset[0])
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=32,

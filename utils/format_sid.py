@@ -7,24 +7,33 @@ import jax.numpy as jnp
 import hashlib
 
 
-def assign_sequential_group_ids_with_stats(emb_idxs, total_items):
-    emb_idxs = jnp.array(emb_idxs).T  # Shape (num_points, 3)
+def assign_sequential_group_ids_with_stats(emb_idxs, total_items, has_review_flags=None):
+    """
+    emb_idxs: array of shape (num_points, 3)
+    has_review_flags: array/list of 0/1 indicating which rows have reviews
+    """
+    emb_idxs = jnp.array(emb_idxs).T
     emb_idxs_np = np.array(emb_idxs)
 
-    group_counts = defaultdict(int)  # (a,b,c) -> current count
-    formatted_embeddings = []        # Final 4-element embeddings
-
-    for key in map(tuple, emb_idxs_np):
+    group_dict = defaultdict(list)  # key -> list of (row_idx, has_review)
+    for i, key in enumerate(map(tuple, emb_idxs_np)):
         key = tuple(int(x) for x in key)
-        
-        seq_id = group_counts[key]
-        group_counts[key] += 1
+        review_flag = has_review_flags[i] if has_review_flags is not None else 0
+        group_dict[key].append((i, review_flag))
 
-        a, b, c = key
-        formatted = (a, b, c, seq_id)
-        formatted_embeddings.append(formatted)
+    formatted_embeddings = [None] * len(emb_idxs_np)
+
+    # Assign sequential IDs
+    for key, rows in group_dict.items():
+        # Sort rows so that has_review=1 comes first
+        rows_sorted = sorted(rows, key=lambda x: -x[1])  # 1 first, 0 later
+
+        for seq_id, (row_idx, _) in enumerate(rows_sorted):
+            a, b, c = key
+            formatted_embeddings[row_idx] = (a, b, c, seq_id)
 
     # --------- Now collect statistics ----------
+    group_counts = {k: len(v) for k, v in group_dict.items()}
     unique_groups = len(group_counts)
     collision_item_cnt = sum(size for size in group_counts.values() if size >= 2)
     collision_pct = collision_item_cnt / total_items
@@ -36,6 +45,7 @@ def assign_sequential_group_ids_with_stats(emb_idxs, total_items):
     }
 
     return formatted_embeddings, stats
+
 
 
 def hash_user_id(reviewer_id, num_buckets=2000):

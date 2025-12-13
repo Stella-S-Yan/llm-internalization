@@ -11,7 +11,7 @@ import os
 
 base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
 embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
-think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor" / "checkpoint-29000"
+think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor" / "checkpoint-50000"
 
 # Load BASE MODEL again — quantized or FP16 as desired
 model = AutoModelForCausalLM.from_pretrained(

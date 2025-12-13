@@ -6,11 +6,6 @@ Have very few trainable parameters (1024 * hidden_dim).
 The objective (contrastive loss) is smooth and well-behaved. 
 The model's other weights are frozen, so the optimization surface doesn't shift. 
 So a complex LR schedul is not necessary, but a gental warmup and/or decay can still help stabilize early updates and avoid overshooting
-
-
-Difficult to make it DDP. Just keep the current single GPU version
-Set CUDA_VISIBLE_DEVICES and run
-$ python train_sid_emb_alignment.py
 """
 
 
@@ -24,44 +19,26 @@ from torch.utils.tensorboard import SummaryWriter
 import random
 import os
 import itertools
-from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
-import numpy as np
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Set seeds for reproducibility
-seed = 411
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-np.random.seed(seed)
-random.seed(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
-
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
+MODEL_SAVE_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 LOG_DIR = config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 BATCH_SIZE = 4096
-TOTAL_STEPS = 20_000     # plateau at step 2k
-LR =  4e-3         #  1e-3 best, but then overfit 
+TOTAL_STEPS = 12_000     # plateau at epoch 2k
+LR =  1e-3         #  1e-3 best, but then overfit 
 TEMP = 0.1     # high temperature: smoother distribution, softer gradients
-
 SCALE = 0.01    # Best
-WARMUP_UP = 200
-POLY_POW = 2.0
-POLY_END_LR = 1e-7  # better than 1e-6 for Toys_and_Games
 
 
 # Create an informative run name
-RUN_NAME = f"poly{POLY_POW}_endlr_{POLY_END_LR}_{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
+RUN_NAME = f"sid_align_lr{LR}_temp{TEMP}_total_steps{TOTAL_STEPS}_bs{BATCH_SIZE}_scale{SCALE}"
 
 
 def load_model_tokenizer(run_test: False):
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.bfloat16) 
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.float32)  # FP16
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -97,7 +74,11 @@ def load_model_tokenizer(run_test: False):
 
 class SIDDataset(Dataset):
     def __init__(self):
-        self.data = bagz_utils.read_parquet(config.META_W_ALL_SID)[["llama_embedding", "formatted_sid"]].values.tolist()
+        self.df = bagz_utils.read_parquet(config.META_W_ALL_SID)
+
+        self.data = []
+        tmp = self.df[["llama_embedding", "formatted_sid"]].values.tolist()
+        self.data.extend(tmp)
 
     def __len__(self):
         return len(self.data)
@@ -174,9 +155,8 @@ class SIDRetrievalEvaluator:
             batch_indices = eval_indices[i:i+batch_size]
             B = len(batch_indices)
 
-            # Positive embeddings (cast to bfloat16)
-            pos_embs = torch.stack([self.dataset[j]["A_emb"] for j in batch_indices]).to(self.device, dtype=torch.bfloat16)
-
+            # Positive embeddings
+            pos_embs = torch.stack([self.dataset[j]["A_emb"] for j in batch_indices]).to(self.device)
 
             # SID embeddings
             sid_texts = [self.dataset[j]["sid"] for j in batch_indices]
@@ -187,10 +167,9 @@ class SIDRetrievalEvaluator:
             alignment_scores.extend(batch_alignment.cpu().tolist())
 
             # Candidates: positive + negatives
-            neg_embs_bf16 = neg_embs.to(self.device, dtype=torch.bfloat16)
             candidates_per_sample = torch.cat([
                 pos_embs.unsqueeze(1),                     # [B, 1, H]
-                neg_embs_bf16.unsqueeze(0).expand(B, -1, -1)   # [B, num_neg, H]
+                neg_embs.unsqueeze(0).expand(B, -1, -1)   # [B, num_neg, H]
             ], dim=1)  # [B, num_neg+1, H]
 
             sims = torch.bmm(sid_embs.unsqueeze(1), candidates_per_sample.transpose(1, 2)).squeeze(1)  # [B, num_neg+1]
@@ -221,48 +200,25 @@ class SIDRetrievalEvaluator:
 
 
 
-def save_model(model, tokenizer, old_vocab_size):
+def save_model(model, tokenizer, optimizer, epoch=None, global_step=None):
     save_dir = MODEL_SAVE_DIR
     os.makedirs(save_dir, exist_ok=True)
 
-    # Save tokenizer
+    model.save_pretrained(save_dir)
     tokenizer.save_pretrained(save_dir)
-
-    # Save ONLY the newly trained embedding matrix (NOT full model)
-    emb = model.get_input_embeddings().weight.data
-    new_emb = emb[old_vocab_size:].detach().cpu()
-    torch.save(new_emb, os.path.join(save_dir, "new_embeddings.pt"))
-
-    print(f"Saved tokenizer + new embeddings at: {save_dir}")
+    torch.save({
+        "optimizer": optimizer.state_dict(),
+        "epoch": epoch,
+        "global_step": global_step
+    }, os.path.join(save_dir, "training_state.pt"))
 
 
-
-def load_checkpoint(base_model_name, save_dir):
-    # Load BASE MODEL again — quantized or FP16 as desired
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        dtype=torch.bfloat16,   # or fp16, or load_in_4bit=True
-    )
-
-    # 2. Load extended tokenizer
+def load_checkpoint(save_dir):
+    model = AutoModelForCausalLM.from_pretrained(save_dir)
     tokenizer = AutoTokenizer.from_pretrained(save_dir)
+    optimizer = torch.optim.Adam(model.get_input_embeddings().parameters(), lr=LR)
+    optimizer.load_state_dict(torch.load(os.path.join(save_dir, "optimizer.pt")))
 
-    old_vocab_size = model.get_input_embeddings().weight.shape[0]
-    new_vocab_size = len(tokenizer)
-
-    # 3. Resize embedding table
-    model.resize_token_embeddings(new_vocab_size)
-
-    # 4. Load saved new embedding weights
-    new_emb = torch.load(os.path.join(save_dir, "new_embeddings.pt")).to(model.device)
-
-    # 5. Insert the new embeddings back into the table
-    with torch.no_grad():
-        model.get_input_embeddings().weight[old_vocab_size:] = new_emb
-
-    print(f"Restored model with extended vocab ({new_vocab_size} tokens)")
-
-    return model, tokenizer
    
 
 def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
@@ -277,23 +233,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     emb.weight.requires_grad = True
 
     optimizer = torch.optim.Adam([emb.weight], lr=LR)
-    # scheduler = get_cosine_schedule_with_warmup(
-    #     optimizer,
-    #     num_warmup_steps=WARMUP_UP,
-    #     num_training_steps=TOTAL_STEPS,  # short warmup then flat
-    # )
-    # scheduler = get_inverse_sqrt_schedule(
-    #     optimizer,
-    #     num_warmup_steps=WARMUP_UP,   # same warmup you used before
-    #     timescale=None               # optional; defaults to warmup steps
-    # )
-    scheduler = get_polynomial_decay_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=WARMUP_UP,         # e.g., 500 steps
-        num_training_steps=TOTAL_STEPS,     # total steps in your training
-        lr_end=POLY_END_LR,                        # final LR
-        power=POLY_POW                            # polynomial power (>1 for faster early decay)
-    )
 
     model.to(DEVICE)
     
@@ -314,18 +253,14 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     data_iter = itertools.cycle(dataloader)  # infinite iterator over dataloader
 
     for global_step in range(TOTAL_STEPS):
-        # if global_step == 500:
-        #     for g in optimizer.param_groups:
-        #         g["lr"] *= SCALE
-        
-        # if global_step == 1200:
-        #     for g in optimizer.param_groups:
-        #         g["lr"] *= SCALE
+        if global_step == 400:
+            for g in optimizer.param_groups:
+                g["lr"] *= SCALE
 
         batch = next(data_iter)  # sample one batch per step
         
         # A_norm: target description embeddings (frozen), already normalized
-        A_norm = batch["A_emb"].to(model.device, dtype=torch.bfloat16)
+        A_norm = batch["A_emb"].to(DEVICE)  # [B, H]
         sid_text = batch["sid"]       # list of SID strings
 
         # Tokenize SID strings
@@ -345,7 +280,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         
         # Normalize embeddings
         C_norm = F.normalize(C_batch, dim=1)
-        # C_norm = C_norm.to(torch.bfloat16)  # optional, but usually C_batch is already bf16
 
         # Contrastive loss
         logits1 = (A_norm @ C_norm.T) / TEMP
@@ -355,7 +289,8 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         loss1 = F.cross_entropy(logits1, labels)
         loss2 = F.cross_entropy(logits2, labels)
         loss = (loss1 + loss2) / 2
-        
+
+        optimizer.zero_grad()
         loss.backward()
 
         # Mask: zero out grads for old tokens
@@ -364,12 +299,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
                 emb.weight.grad[:old_vocab_size] = 0
 
         optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad()
-
-        # log LR
-        current_lr = optimizer.param_groups[0]['lr']
-        writer.add_scalar("train/lr", current_lr, global_step)
 
         # Evaluation
         if global_step > 0 and global_step % 50 == 0:
@@ -391,10 +320,17 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
 
             if recall["top10_acc"] > best_recall:
                 best_recall = recall["top10_acc"]
-                save_model(model, tokenizer, old_vocab_size)
+                save_model(model, tokenizer, optimizer)
                 print(f"model saved for recal@10 = {best_recall}")
             
         writer.add_scalar("train/loss", loss.item(), global_step)
+
+        # Save checkpoint
+        # if global_step > 2000 and global_step % 500 == 0:
+            # if loss.item() < best_loss:
+            #     best_loss = loss.item()
+            #     save_model(model, tokenizer, optimizer)
+
 
 
 

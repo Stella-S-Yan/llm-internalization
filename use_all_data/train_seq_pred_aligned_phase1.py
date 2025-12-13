@@ -24,11 +24,12 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 from torch.utils.data import Subset
+import os
+import random
 
 
-MODEL_INPUT_DIR = config.MODEL_DIR / "all_sid_aligned_model"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"train_seq_pred_aligned_phase1"
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_train_seq_pred_aligned_phase1"
 
 
 
@@ -42,6 +43,7 @@ class Params:
     LORA_RANK = 16      # 16 large rank overfit early
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
+    POLY_POW = 2.0
 
 
 TEMPLATE = """Rule:
@@ -58,11 +60,35 @@ TEMPLATE = """Rule:
             {next}
         """
 
-def load_model_tokenizer():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_INPUT_DIR)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_INPUT_DIR)
+
+def load_checkpoint(base_model_name, save_dir):
+    # Load BASE MODEL again — quantized or FP16 as desired
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        dtype=torch.bfloat16,   # or fp16, or load_in_4bit=True
+    )
+
+    # 2. Load extended tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(save_dir)
+
+    old_vocab_size = model.get_input_embeddings().weight.shape[0]
+    new_vocab_size = len(tokenizer)
+
+    # 3. Resize embedding table
+    model.resize_token_embeddings(new_vocab_size)
+
+    # 4. Load saved new embedding weights
+    new_emb = torch.load(os.path.join(save_dir, "new_embeddings.pt")).to(model.device)
+    print(f"new_emb device: {model.device}")
+
+    # 5. Insert the new embeddings back into the table
+    with torch.no_grad():
+        model.get_input_embeddings().weight[old_vocab_size:] = new_emb
+
+    print(f"Restored model with extended vocab ({new_vocab_size} tokens)")
 
     return model, tokenizer
+
 
 
 class SeqDataset(Dataset):
@@ -150,8 +176,11 @@ def sft_data_collator(batch, tokenizer):
     - labels padded with -100 (so prompts are ignored)
     Returns attention_mask automatically.
     """
-    input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
-    labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
+    # input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
+    # labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
+
+    input_ids = [f["input_ids"].clone().detach() for f in batch]
+    labels    = [f["labels"].clone().detach() for f in batch]
 
     # pad sequences to the max length in the batch
     input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id, padding_side="left")  
@@ -339,6 +368,20 @@ class GenerateEvalCallback(TrainerCallback):
         return control
 
 
+class SaveBestModelCallback(TrainerCallback):
+    def __init__(self):
+        self.best = float('inf')
+        
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        eval_loss = metrics.get("eval_loss")
+        if eval_loss is not None and eval_loss < self.best:
+            self.best = eval_loss
+            control.should_save = True  # save checkpoint this step
+        else:
+            control.should_save = False  # skip checkpoint
+        return control
+
+
 def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
@@ -354,14 +397,16 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
-        lr_scheduler_type="cosine",  # can also try "cosine", "linear"
+        # lr_scheduler_type="polynomial",  # can also try "cosine", "linear"
+        # lr_scheduler_kwargs={"power": params.POLY_POW, "lr_end": 5e-6},
+        lr_scheduler_type="cosine",
         logging_steps=50,
-        # save_strategy="steps",
-        # save_steps=1000,
-        save_strategy="no",
-        save_total_limit=1,
+        save_strategy="steps",
+        # save_strategy="no",
+        save_steps=1000,
+        save_total_limit=10,
         eval_strategy="steps",
-        eval_steps=500,
+        eval_steps=1000,
         # eval_strategy="no",
         optim="adamw_torch",
         # optim="adafactor",
@@ -400,14 +445,17 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         data_collator=lambda batch: sft_data_collator(batch, tokenizer),  # use custom collator
     )
 
-    callback = GenerateEvalCallback(
-        trainer=trainer,
-        eval_dataset=gen_eval_dataset,
-        tokenizer=tokenizer,
-        eval_fn=evaluate_sequence_recall,
-        eval_steps=5000 
-    )
+    callback = SaveBestModelCallback()
     trainer.add_callback(callback)
+
+    # callback = GenerateEvalCallback(
+    #     trainer=trainer,
+    #     eval_dataset=gen_eval_dataset,
+    #     tokenizer=tokenizer,
+    #     eval_fn=evaluate_sequence_recall,
+    #     eval_steps=5000 
+    # )
+    # trainer.add_callback(callback)
 
     trainer.train()
 
@@ -419,26 +467,38 @@ def main():
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
     parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
-    parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
+    parser.add_argument("--TOTAL_STEPS", type=int, default=10000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
+    parser.add_argument("--POLY_POW", type=float, default=2.0, help="Polynomial LR scheduler power")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_POW{Params.POLY_POW}_{config.DATA_SOURCE}_{config.REVIEW_TYPE}"
     Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
-    model, tokenizer = load_model_tokenizer()
+    # Load model and tokenizer in local device
+    base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
+    # Load model to cpu first and let torchrun handle the device placement
+    model, tokenizer = load_checkpoint(base_model_name, save_dir) 
+    print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     
     train_dataset = SeqDataset(tokenizer, "train")
     eval_dataset = SeqDataset(tokenizer, "eval")
+
+    random.seed(411)
+
+    num_eval = 6000
+    indices = random.sample(range(len(eval_dataset)), num_eval)
+    eval_dataset = Subset(eval_dataset, indices)
 
     gen_eval_dataset = SeqGenDataset("eval")
 
