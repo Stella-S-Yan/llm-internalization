@@ -102,11 +102,13 @@ def evaluate_sequence_recall(
             ]
 
             # Check hits for each k
-            hits = [1 if targets[i] in g else 0 for g in generations]
-            # hits = [
-            #     1 if " ".join(targets[i].split()[:3]) in g else 0
-            #     for g in generations
-            # ]
+
+            # First 3 levels
+            first3= " ".join(targets[i].split()[:3])
+            hits = [1 if first3 in g else 0 for g in generations]
+
+            # All levels
+            # hits = [1 if targets[i] in g else 0 for g in generations]
 
             for k in top_k_list:
                 # if any of the first k generations hits

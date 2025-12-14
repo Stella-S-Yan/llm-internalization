@@ -48,7 +48,7 @@ MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alig
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
 BATCH_SIZE = 2048
 TOTAL_STEPS = 4_000     # plateau at step 2k
-LR =  1e-3         #  
+LR =  6e-3         #  
 SCHEDULE = 'cosine'
 
 # temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
@@ -99,6 +99,15 @@ def load_model_tokenizer(run_test: False):
 
 
 class SIDDataset(Dataset):
+
+    def select_rows(group):
+        if (group["has_review"] == 1).any():
+            # print("~~~ Has more rows with reviews in the group.")
+            return group[group["has_review"] == 1]
+        else:
+            return group.head(1)
+        
+
     def __init__(self):
         print("--- Use all items in meta_df. ")
 
@@ -130,7 +139,12 @@ class SIDDataset(Dataset):
             df = df.sort_values(["sid_prefix", "sid_D"], ascending=[True, True])
 
             # Keep ONLY the first row per prefix (i.e., the lowest D-index row)
-            df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
+            # df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
+            df = (
+                df.groupby("sid_prefix", group_keys=False)
+                .apply(SIDDataset.select_rows)
+                .reset_index(drop=True)
+            )
 
             print(f"--- After dropping duplicate sids: {df.shape[0]}")
 

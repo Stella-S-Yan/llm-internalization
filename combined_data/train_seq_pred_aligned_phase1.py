@@ -85,8 +85,8 @@ def load_checkpoint(base_model_name, save_dir):
 class SeqDataset(Dataset):
     def __init__(self, tokenizer, split):
 
-        # sources = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
-        sources = ["Toys_and_Games"]
+        sources = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
+        # sources = ["Toys_and_Games"]
         self.tokenizer = tokenizer
         self.data = []
 
@@ -222,7 +222,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=8,
+    max_new_tokens=7,
     top_k_list=[1, 5, 10],
     print_random_example=True,  # new flag
 ):
@@ -420,20 +420,21 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         # lr_scheduler_type="polynomial",  # can also try "cosine", "linear"
         # lr_scheduler_kwargs={"power": params.POLY_POW, "lr_end": 5e-6},
         lr_scheduler_type="cosine",
-        logging_steps=50,
+        logging_steps=1000,
         save_strategy="steps",
         # save_strategy="no",
-        save_steps=1000,
-        save_total_limit=10,
+        save_steps=2000,
+        save_total_limit=20,
+        load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=1000,
+        eval_steps=5000,
         # eval_strategy="no",
         optim="adamw_torch",
         # optim="adafactor",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
         fp16=False,         # optional: if you want fp16 instead
         report_to="tensorboard",
-        ddp_find_unused_parameters=False,
+        ddp_find_unused_parameters=False
     )
     
     
@@ -478,6 +479,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     # trainer.add_callback(callback)
 
     trainer.train()
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-42000")
 
 
 def main():
@@ -503,6 +505,8 @@ def main():
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
+    random.seed(411)
+
     # Load model and tokenizer in local device
     base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
     save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
@@ -511,21 +515,23 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     
-    train_dataset = SeqDataset(tokenizer, "train")  # 42,382
+    train_dataset = SeqDataset(tokenizer, "train")  
     print(f"---Train dataset size: {len(train_dataset)}")
+    # num_train = 6000
+    # indices = random.sample(range(len(train_dataset)), num_train)
+    # train_dataset = Subset(train_dataset, indices)
 
-    for i in range(10):
-        print(train_dataset[i]["labels"])
-        print(tokenizer.decode(train_dataset[i]["labels"][train_dataset[i]["labels"]!=-100]))
+    # Test purpose
+    # for i in range(10):
+    #     print(train_dataset[i]["labels"])
+    #     print(tokenizer.decode(train_dataset[i]["labels"][train_dataset[i]["labels"]!=-100]))
 
     eval_dataset = SeqDataset(tokenizer, "eval")
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-    random.seed(411)
-
-    num_eval = 6000
-    indices = random.sample(range(len(eval_dataset)), num_eval)
-    eval_dataset = Subset(eval_dataset, indices)
+    # num_eval = 6000
+    # indices = random.sample(range(len(eval_dataset)), num_eval)
+    # eval_dataset = Subset(eval_dataset, indices)
 
     # gen_eval_dataset = SeqGenDataset("eval")
     gen_eval_dataset = None
