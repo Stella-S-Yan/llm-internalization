@@ -13,7 +13,7 @@ MODEL_DIR = DATA_DIR / "model"
 RUN_DIR = DATA_DIR / "runs"
 
 DATA_SOURCE = "Amazon"
-REVIEW_TYPE =  "Toys_and_Games"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
+REVIEW_TYPE = "Toys_and_Games"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
 
 time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
