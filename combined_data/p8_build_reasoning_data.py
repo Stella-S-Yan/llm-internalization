@@ -9,23 +9,24 @@ from utils import merge_save_load_model
 import bagz
 import json
 import torch
+import re
 
 
 PROMPT_TEMPLATE = """
-                [SFT:Think]
-                user {uid}: {history}
-                {predict}
-            """
+[SFT:Think]
+user {uid}: {history}
+predict: {predict}
+"""
 
 TARGET_TEMPLATE = """
-            <hsz>{history_len}</hsz>
-            <hist>
-                {sid_cat_list}
-            </hist>
-            <cat>{target_sid_cat}</cat>
-            <sid>{target_sid}</sid>{eos}
-            """
-
+<hsz>{history_len}</hsz>
+<hist>
+    {sid_cat_list}
+</hist>
+<cat>{target_sid_cat}</cat>
+<sid>{target_sid}</sid>{eos}
+"""
+PATTERN = r"A\d+\s+B\d+\s+C\d+\s+D\d+"
 
 def do_the_work(tokenizer, split):
 
@@ -50,7 +51,8 @@ def do_the_work(tokenizer, split):
         history = record["input"]
         target = record["target"]
 
-        sids = [x.strip() for x in history.split(";")]
+        # sids = [x.strip() for x in history.split(";")]
+        sids = re.findall(PATTERN, history)
         cats = [sid_to_cat.get(i) for i in sids]
         history_len = len(sids)
 

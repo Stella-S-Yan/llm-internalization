@@ -104,11 +104,11 @@ def evaluate_sequence_recall(
             # Check hits for each k
 
             # First 3 levels
-            first3= " ".join(targets[i].split()[:3])
-            hits = [1 if first3 in g else 0 for g in generations]
+            # first3= " ".join(targets[i].split()[:3])
+            # hits = [1 if first3 in g else 0 for g in generations]
 
             # All levels
-            # hits = [1 if targets[i] in g else 0 for g in generations]
+            hits = [1 if targets[i] in g else 0 for g in generations]
 
             for k in top_k_list:
                 # if any of the first k generations hits
@@ -154,6 +154,7 @@ if dist.is_initialized():
 gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset(tokenizer, "eval")
 print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
 # gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset("test")
+print(gen_eval_dataset[0])
 
 if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
     rank = torch.distributed.get_rank()

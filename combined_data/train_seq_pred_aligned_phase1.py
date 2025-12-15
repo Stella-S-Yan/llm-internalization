@@ -488,11 +488,14 @@ def main():
     parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
-    parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
+    parser.add_argument("--LORA_RANK", type=int, default=16, help="Rank of LoRA adaptor")
+    parser.add_argument("--LORA_RATIO", type=float, default=1, help="LoRA adapter ratio")
     parser.add_argument("--TOTAL_STEPS", type=int, default=10000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--POLY_POW", type=float, default=2.0, help="Polynomial LR scheduler power")
+
+    
 
     args = parser.parse_args()
 
