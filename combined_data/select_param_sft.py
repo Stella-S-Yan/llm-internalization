@@ -197,7 +197,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         r=params.LORA_RANK,                      # rank
         lora_alpha=params.LORA_RANK * params.LORA_RATIO,
         # target_modules=["q_proj", "v_proj"],  # attention projections
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        # target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         lora_dropout=params.LORA_DROPOUT,
         bias="none",
         task_type=TaskType.CAUSAL_LM
@@ -254,11 +254,13 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     
-    ##### Generate 2% fixed subset for parameter selection ####
-    # SUBSET_SIZE = 52_000
-    SUBSET_SIZE = 252_000
+    ##### Generate 2% fixed subset for parameter selection, 10% eval data ####
+    TRAIN_SUBSET_SIZE = 52_000
+    # SUBSET_SIZE = 252_000
+    EVAL_SUBSET_SIZE = 7000
     SEED = 411
     TRAIN_INDEX_FILE = config.DATA_DIR / "train_subset_52k_seed411.json"
+    EVAL_INDEX_FILE = config.DATA_DIR / "train_subset_7k_seed411.json"
     train_dataset = SeqDataset(tokenizer, "train")  
     print(f"---Train dataset size: {len(train_dataset)}")
     try:
@@ -270,7 +272,7 @@ def main():
     except FileNotFoundError:
         # Create subset deterministically
         rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-        indices = rng.sample(range(len(train_dataset)), SUBSET_SIZE)
+        indices = rng.sample(range(len(train_dataset)), TRAIN_SUBSET_SIZE)
         indices = sorted(indices)   # optional but recommended
 
         with open(TRAIN_INDEX_FILE, "w") as f:
@@ -288,6 +290,23 @@ def main():
     #     print(tokenizer.decode(train_dataset[i]["labels"][train_dataset[i]["labels"]!=-100]))
 
     eval_dataset = SeqDataset(tokenizer, "eval")
+    try:
+        # Reuse existing subset if it exists
+        with open(EVAL_INDEX_FILE, "r") as f:
+            indices = json.load(f)
+        print(f"Loaded existing subset: {len(indices)} samples")
+
+    except FileNotFoundError:
+        # Create subset deterministically
+        rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+        indices = rng.sample(range(len(eval_dataset)), EVAL_SUBSET_SIZE)
+        indices = sorted(indices)   # optional but recommended
+
+        with open(EVAL_INDEX_FILE, "w") as f:
+            json.dump(indices, f)
+
+        print(f"---Created new subset: {len(indices)} samples")
+    eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
     # gen_eval_dataset = SeqGenDataset("eval")

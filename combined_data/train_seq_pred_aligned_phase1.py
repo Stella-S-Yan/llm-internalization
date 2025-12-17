@@ -420,7 +420,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         logging_steps=1000,
         save_strategy="steps",
         save_steps=2000,
-        save_total_limit=10,
+        save_total_limit=20,
         load_best_model_at_end=False,
         eval_strategy="steps",
         eval_steps=1000,
@@ -496,7 +496,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_cosine_combined"
+    run_name = f"fixed_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_cosine_combined"
     Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
@@ -512,44 +512,10 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     
-    ##### Generate 2% fixed subset for parameter selection ####
-    SUBSET_SIZE = 52_000
-    SEED = 411
-    TRAIN_INDEX_FILE = config.DATA_DIR / "train_subset_52k_seed411.json"
     train_dataset = SeqDataset(tokenizer, "train")  
-    print(f"---Train dataset size: {len(train_dataset)}")
-    try:
-        # Reuse existing subset if it exists
-        with open(TRAIN_INDEX_FILE, "r") as f:
-            indices = json.load(f)
-        print(f"Loaded existing subset: {len(indices)} samples")
-
-    except FileNotFoundError:
-        # Create subset deterministically
-        rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-        indices = rng.sample(range(len(train_dataset)), SUBSET_SIZE)
-        indices = sorted(indices)   # optional but recommended
-
-        with open(TRAIN_INDEX_FILE, "w") as f:
-            json.dump(indices, f)
-
-        print(f"Created new subset: {len(indices)} samples")
-
-
-    train_dataset = Subset(train_dataset, indices)
-    print("Subset fingerprint:", indices[:10])
-
-    # Test purpose
-    # for i in range(10):
-    #     print(train_dataset[i]["labels"])
-    #     print(tokenizer.decode(train_dataset[i]["labels"][train_dataset[i]["labels"]!=-100]))
 
     eval_dataset = SeqDataset(tokenizer, "eval")
     print(f"---Eval dataset size: {len(eval_dataset)}")
-
-    # num_eval = 6000
-    # indices = random.sample(range(len(eval_dataset)), num_eval)
-    # eval_dataset = Subset(eval_dataset, indices)
 
     # gen_eval_dataset = SeqGenDataset("eval")
     gen_eval_dataset = None
