@@ -44,6 +44,7 @@ class Params:
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     POLY_POW = 2.0
     ACC_STEP = 1
+    SOURCE = "Toys_and_Games"
 
 
 TEMPLATE = """
@@ -150,29 +151,35 @@ class SeqDataset(Dataset):
 
 
 class SeqGenDataset(Dataset):
-    def __init__(self, tokenizer, split="eval"):
-        self.tokenizer = tokenizer
-        if split == "train":
-            self.data_reader = bagz.Reader(config.TRAIN_DATA)
-        if split == "eval":
-            self.data_reader = bagz.Reader(config.EVAL_DATA)
-        elif split == "test":
-            self.data_reader = bagz.Reader(config.TEST_DATA)
+    def __init__(self, split, sources):
+        self.data = []
 
-        # Convert all records in one shot
-        self.data = [json.loads(record.decode()) for record in self.data_reader]
+        for src in sources:
+            if split == "train":
+                data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_train.bagz" )
+            if split == "eval":
+                data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_eval.bagz" )
+            elif split == "test":
+                data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_test.bagz" )
+
+            data_reader = bagz.Reader(data_path)
+
+            for r in data_reader:
+                record = json.loads(r.decode())
+                self.data.append((record, src))   # store source name
+
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        record = self.data[idx]
+        record, source = self.data[idx]
         uid = record["uid"]
-        if config.REVIEW_TYPE == "Beauty":
+        if source == "Beauty":
             uid = f"B_{record['uid']}"
-        elif config.REVIEW_TYPE == "Toys_and_Games":
+        elif source == "Toys_and_Games":
             uid = f"T_{record['uid']}"
-        elif config.REVIEW_TYPE == "Sports_and_Outdoors":
+        elif source == "Sports_and_Outdoors":
             uid = f"S_{record['uid']}"
         
         input = record["input"]
@@ -436,8 +443,15 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     lora_config = LoraConfig(
         r=params.LORA_RANK,                      # rank
         lora_alpha=params.LORA_RANK * params.LORA_RATIO,
-        # target_modules=["q_proj", "v_proj"],  # attention projections
-        # target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=[
+            "q_proj",
+            "gate_proj",
+            "v_proj",
+            "o_proj",
+            "k_proj",
+            "up_proj",
+            "down_proj"
+        ],
         lora_dropout=params.LORA_DROPOUT,
         bias="none",
         task_type=TaskType.CAUSAL_LM
@@ -473,7 +487,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     trainer.add_callback(callback)
 
     trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-40000")
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-18000")
 
 
 def main():
@@ -489,6 +503,7 @@ def main():
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
     parser.add_argument("--POLY_POW", type=float, default=2.0, help="Polynomial LR scheduler power")
+    parser.add_argument("--SOURCE", type=str, default="Toys_and_Games", help="Source dataset to use for evaluation")
 
     
 
@@ -497,7 +512,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"fixed_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_cosine_combined"
+    run_name = f"{Params.SOURCE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_cosine_combined"
     Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
@@ -519,14 +534,14 @@ def main():
     GEN_EVAL_SUBSET_SIZE = 7000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
 
-    eval_dataset = SeqDataset(tokenizer, "eval", sources=["Toys_and_Games"])
+    eval_dataset = SeqDataset(tokenizer, "eval", sources=[Params.SOURCE])
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
 
-    gen_eval_dataset = SeqGenDataset("eval")
+    gen_eval_dataset = SeqGenDataset("eval", sources=[Params.SOURCE])
     indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     gen_eval_dataset = Subset(gen_eval_dataset, indices)
