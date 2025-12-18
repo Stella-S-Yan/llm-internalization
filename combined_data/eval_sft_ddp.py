@@ -180,7 +180,7 @@ local_hits, local_total = evaluate_sequence_recall(
     tokenizer=tokenizer,
     eval_loader=eval_loader,
     num_beams=20,
-    max_new_tokens=8,
+    max_new_tokens=7,
     top_k_list=[1, 5, 10],
 )
 

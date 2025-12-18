@@ -419,7 +419,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         lr_scheduler_type="cosine",
         logging_steps=1000,
         save_strategy="steps",
-        save_steps=1000,
+        save_steps=2000,
         save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
@@ -516,7 +516,7 @@ def main():
     train_dataset = SeqDataset(tokenizer, "train", sources=["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])  
 
     SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 200
+    GEN_EVAL_SUBSET_SIZE = 7000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
 
     eval_dataset = SeqDataset(tokenizer, "eval", sources=["Toys_and_Games"])
