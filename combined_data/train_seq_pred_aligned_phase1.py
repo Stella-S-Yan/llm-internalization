@@ -43,6 +43,7 @@ class Params:
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     POLY_POW = 2.0
+    ACC_STEP = 1
 
 
 TEMPLATE = """
@@ -83,10 +84,9 @@ def load_checkpoint(base_model_name, save_dir):
 
 
 class SeqDataset(Dataset):
-    def __init__(self, tokenizer, split):
+    def __init__(self, tokenizer, split, sources):
 
-        sources = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
-        # sources = ["Toys_and_Games"]
+        # sources = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
         self.tokenizer = tokenizer
         self.data = []
 
@@ -411,7 +411,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         output_dir=MODEL_SAVE_DIR,
         logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
         weight_decay=params.WEIGHT_DECAY,
@@ -419,8 +419,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         lr_scheduler_type="cosine",
         logging_steps=1000,
         save_strategy="steps",
-        save_steps=2000,
-        save_total_limit=20,
+        save_steps=1000,
+        save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
         eval_steps=1000,
@@ -463,17 +463,17 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     # callback = SaveBestModelCallback()
     # trainer.add_callback(callback)
 
-    # callback = GenerateEvalCallback(
-    #     trainer=trainer,
-    #     eval_dataset=gen_eval_dataset,
-    #     tokenizer=tokenizer,
-    #     eval_fn=evaluate_sequence_recall,
-    #     eval_steps=5000 
-    # )
-    # trainer.add_callback(callback)
+    callback = GenerateEvalCallback(
+        trainer=trainer,
+        eval_dataset=gen_eval_dataset,
+        tokenizer=tokenizer,
+        eval_fn=evaluate_sequence_recall,
+        eval_steps=1000 
+    )
+    trainer.add_callback(callback)
 
     trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-42000")
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-40000")
 
 
 def main():
@@ -487,6 +487,7 @@ def main():
     parser.add_argument("--TOTAL_STEPS", type=int, default=10000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
+    parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
     parser.add_argument("--POLY_POW", type=float, default=2.0, help="Polynomial LR scheduler power")
 
     
@@ -512,13 +513,25 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     
-    train_dataset = SeqDataset(tokenizer, "train")  
+    train_dataset = SeqDataset(tokenizer, "train", sources=["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])  
 
-    eval_dataset = SeqDataset(tokenizer, "eval")
+    SEED = 411
+    GEN_EVAL_SUBSET_SIZE = 200
+    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+
+    eval_dataset = SeqDataset(tokenizer, "eval", sources=["Toys_and_Games"])
+    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-    # gen_eval_dataset = SeqGenDataset("eval")
-    gen_eval_dataset = None
+
+    gen_eval_dataset = SeqGenDataset("eval")
+    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    print(f"---Gen Eval dataset size: {len(eval_dataset)}")
+    # gen_eval_dataset = None
 
     train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
     
