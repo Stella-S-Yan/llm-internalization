@@ -20,17 +20,18 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.data import Subset
 import math
 from torch.optim.lr_scheduler import LambdaLR
+import os
 
 
 
 class ReasoningDataset(Dataset):
-    def __init__(self, split, datatype: str):
+    def __init__(self, split, datatype: str, sources):
         self.datatype = datatype
 
         self.data = []
-        sources = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
-        for source in sources:
-            self.data.extend(torch.load(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{source}_think_data_{split}.pt'))
+        for src in sources:
+            data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_think_data_{split}.pt')
+            self.data.extend(torch.load(data_path))
 
 
     def __len__(self):
