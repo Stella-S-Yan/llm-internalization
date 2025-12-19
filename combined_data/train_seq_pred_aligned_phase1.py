@@ -224,7 +224,7 @@ def evaluate_sequence_recall(
     eval_loader,
     num_beams=20,
     max_new_tokens=7,
-    top_k_list=[1, 5, 10],
+    top_k_list=[5],
     print_random_example=True,  # new flag
 ):
     """
@@ -311,80 +311,85 @@ def evaluate_sequence_recall(
 
 
 class GenerateEvalCallback(TrainerCallback):
-    def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps=1000):
+    def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps=1000):
         self.trainer = trainer
-        self.eval_dataset = eval_dataset
+        self.eval_datasets = eval_datasets
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
         self.batch_size = 8
         self.best_metric = None  # Track best metric
 
-    def on_step_end(self, args, state, control, **kwargs):
-
-        # dynamically adjust evaluation frequency
-        if 8000 <= state.global_step:
-            eval_interval = 1000
-        else:
-            eval_interval = self.eval_steps
+    # def on_step_end(self, args, state, control, **kwargs):
+    def on_evaluate(self, args, state, control, **kwargs):
+        eval_interval = self.eval_steps
 
         # Run every eval_steps
         if state.global_step > 0 and state.global_step % eval_interval == 0:
 
-            # If running in DDP, shard the dataset using DistributedSampler
-            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-                rank = torch.distributed.get_rank()
-                # print("Rank: ", rank)
-                sampler = DistributedSampler(self.eval_dataset, shuffle=False)
-            else:
-                rank = 0
-                sampler = None
-
-            # Create 
-            # small_dataset = Subset(self.eval_dataset, range(10))
-            eval_loader = DataLoader(
-                self.eval_dataset,
-                # small_dataset,
-                batch_size=self.batch_size,
-                sampler=sampler,
-                shuffle=False,
-                collate_fn=None  # or custom collate_fn if needed
+            is_ddp = (
+                torch.distributed.is_initialized()
+                and torch.distributed.get_world_size() > 1
             )
 
-            # Wrap DataLoader in tqdm ONLY for rank 0
-            if rank == 0:
-                eval_loader = tqdm(eval_loader, desc=f"Evaluating step {state.global_step}")
+            rank = torch.distributed.get_rank() if is_ddp else 0
+            world_size = torch.distributed.get_world_size() if is_ddp else 1
 
+            for dataset_name, eval_dataset in self.eval_datasets.items():
 
-            # Run your custom generate-based eval
-            metrics = self.eval_fn(self.trainer.model, self.tokenizer, eval_loader)
+                # ---- Sampler (per dataset) ----
+                sampler = (
+                    DistributedSampler(eval_dataset, shuffle=False)
+                    if is_ddp
+                    else None
+                )
 
-            # If DDP, reduce metrics across processes
-            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-                for k in metrics:
-                    tensor = torch.tensor(metrics[k], device=self.trainer.model.device)
-                    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
-                    metrics[k] = (tensor / torch.distributed.get_world_size()).item()
+                eval_loader = DataLoader(
+                    eval_dataset,
+                    batch_size=self.batch_size,
+                    sampler=sampler,
+                    shuffle=False,
+                    collate_fn=None,  # or your custom collate_fn
+                )
 
-            # Prefix metrics for consistency with Trainer logs
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
-            metrics["step"] = state.global_step
+                # tqdm only on rank 0
+                if rank == 0:
+                    eval_loader = tqdm(
+                        eval_loader,
+                        desc=f"Eval [{dataset_name}] @ step {state.global_step}",
+                    )
 
-            # Log to TensorBoard / WandB / etc.
-            self.trainer.log(metrics)
+                # ---- Custom generate-based eval ----
+                metrics = self.eval_fn(
+                    self.trainer.model,
+                    self.tokenizer,
+                    eval_loader,
+                )
 
-            # Also print for visibility
-            if rank == 0:
-                print(f"\n[Custom generate eval @ step {state.global_step}] {metrics}")
+                # ---- DDP reduce (mean) ----
+                if is_ddp:
+                    for k, v in metrics.items():
+                        tensor = torch.tensor(v, device=self.trainer.model.device)
+                        torch.distributed.all_reduce(
+                            tensor, op=torch.distributed.ReduceOp.SUM
+                        )
+                        metrics[k] = (tensor / world_size).item()
 
-                # Save best model 
-                current_metric = metrics["eval_recall_5"]  
-                if (self.best_metric is None) or (current_metric > self.best_metric):
-                    self.best_metric = current_metric
-                    print(f"New best metric {current_metric:.4f}! Saving model...")
-                    output_dir = f"{args.output_dir}/best_checkpoint"
-                    self.trainer.save_model(output_dir)
-                    self.trainer.save_state()
+                # ---- Prefix metrics for TensorBoard ----
+                metrics = {
+                    f"eval/{dataset_name}/{k}": v
+                    for k, v in metrics.items()
+                }
+                metrics["step"] = state.global_step
+
+                # ---- Log ----
+                self.trainer.log(metrics)
+
+                if rank == 0:
+                    print(
+                        f"\n[Custom eval @ step {state.global_step}] "
+                        f"[{dataset_name}] {metrics}"
+                    )
 
         return control
 
@@ -403,7 +408,7 @@ class SaveBestModelCallback(TrainerCallback):
         return control
 
 
-def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
+def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
@@ -473,7 +478,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
 
     callback = GenerateEvalCallback(
         trainer=trainer,
-        eval_dataset=gen_eval_dataset,
+        eval_datasets=gen_eval_datasets,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
         eval_steps=1000 
@@ -525,24 +530,34 @@ def main():
     train_dataset = SeqDataset(tokenizer, "train", sources=["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])  
 
     SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 7000
+    GEN_EVAL_SUBSET_SIZE = 6000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
 
-    eval_dataset = SeqDataset(tokenizer, "eval", sources=[Params.SOURCE])
+    eval_dataset = SeqDataset(tokenizer, "eval", sources=["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
+    gen_eval_dataset_1 = SeqGenDataset("eval", sources=["Toys_and_Games"])
+    gen_eval_dataset_2 = SeqGenDataset("eval", sources=["Sports_and_Outdoors"])
+    gen_eval_dataset_3 = SeqGenDataset("eval", sources=["Beauty"])
+
+    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-
-    gen_eval_dataset = SeqGenDataset("eval", sources=[Params.SOURCE])
-    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = rng.sample(range(len(gen_eval_dataset_1)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset = Subset(gen_eval_dataset, indices)
-    print(f"---Gen Eval dataset size: {len(eval_dataset)}")
-    # gen_eval_dataset = None
+    gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
+    gen_eval_dataset_2 = Subset(gen_eval_dataset_2, indices)
+    gen_eval_dataset_3 = Subset(gen_eval_dataset_3, indices)
 
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
+    gen_eval_datasets = {
+        "toys": gen_eval_dataset_1,
+        "sports": gen_eval_dataset_2,
+        "beauty": gen_eval_dataset_3
+    }
+
+
+    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, Params)
     
 
 if __name__ == "__main__":
