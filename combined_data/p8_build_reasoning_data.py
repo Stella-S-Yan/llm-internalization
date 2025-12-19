@@ -5,11 +5,11 @@ Build reasoning data takes time. Build once and save the data to save experiment
 from transformers import AutoTokenizer
 import config
 from utils import bagz_utils
-from utils import merge_save_load_model
 import bagz
 import json
 import torch
 import re
+from tqdm import tqdm
 
 
 PROMPT_TEMPLATE = """
@@ -60,11 +60,11 @@ def do_the_work(tokenizer, split):
     elif split == "train_eval":
         data_reader = bagz.Reader(config.TRAIN_EVAL_DATA)
     
-    raw_data = [json.loads(record.decode()) for record in data_reader]
 
     all_data = []
 
-    for record in raw_data:
+    for record_bytes in tqdm(data_reader, desc=f"Processing {split}"):
+        record = json.loads(record_bytes.decode())
         uid = record["uid"]
         history = record["input"]
         target = record["target"]
@@ -156,8 +156,7 @@ def do_the_work(tokenizer, split):
         all_data.append(data)
 
     # Save data
-    torch.save(all_data, config.PROCESSED_DATA_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_data_{split}.pt")
-
+    bagz_utils.save_object(all_data, config.PROCESSED_DATA_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_data_{split}.bagz")
 
 def main():
     # Only need to load tokenizer

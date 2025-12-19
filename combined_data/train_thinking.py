@@ -21,17 +21,17 @@ from torch.utils.data import Subset
 import math
 from torch.optim.lr_scheduler import LambdaLR
 import os
+from utils import bagz_utils
 
 
 
 class ReasoningDataset(Dataset):
     def __init__(self, split, datatype: str, sources):
         self.datatype = datatype
-
         self.data = []
         for src in sources:
-            data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_think_data_{split}.pt')
-            self.data.extend(torch.load(data_path))
+            data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_think_data_{split}.bagz')
+            self.data.extend(bagz_utils.read_object(data_path))
 
 
     def __len__(self):
@@ -60,11 +60,24 @@ class ReasoningDataset(Dataset):
                 "prompt_token_ids": record["prompt_token_ids"],
                 "target": record["target"],
             }
+        elif self.datatype == "gen_eval":
+            return {
+                "gen_prompt": record["gen_prompt"],
+                "gen_target": record["gen_target"]
+            }
         else:
             raise ValueError(
                 f"Invalid datatype '{self.datatype}'. "
                 f"Expected one of: ['sft', 'grpo', 'raw_text', 'raw_text_vllm']"
             )
+        
+
+def gen_eval_collator(batch):
+    """
+    Collator for datasets where all fields are strings.
+    Returns the batch as a list of dicts.
+    """
+    return batch
 
 
 def sft_data_collator(batch, tokenizer):
