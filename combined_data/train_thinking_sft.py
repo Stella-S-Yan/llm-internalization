@@ -363,9 +363,9 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
 
-    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Sports_and_Outdoors"])
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Sports_and_Outdoors"])
+    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", [Params.SOURCE])
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [Params.SOURCE])
     
     check_idx = 10
     print(train_dataset[check_idx])
