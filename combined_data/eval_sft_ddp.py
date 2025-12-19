@@ -151,7 +151,7 @@ model = model.to(device)
 if dist.is_initialized():
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
-gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset(tokenizer, "eval")
+gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset("eval", [config.REVIEW_TYPE])
 print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
 # gen_eval_dataset = train_seq_pred_aligned_phase1.SeqGenDataset("test")
 print(gen_eval_dataset[0])
