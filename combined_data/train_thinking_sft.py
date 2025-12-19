@@ -20,6 +20,10 @@ import numpy as np
 import random
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+from transformers import TrainerCallback
+from torch.utils.data import Subset
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -31,9 +35,6 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 np.random.seed(seed)
 random.seed(seed)
-# torch.backends.cudnn.deterministic = True # Force CuDNN to use only deterministic algorithms
-# torch.backends.cudnn.benchmark = False    # Disable CuDNN's autotuner that tries to pick the fastest algorithm for input sizes
-
 
 
 class Params:
@@ -47,6 +48,7 @@ class Params:
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ADAPTOR_SAVE_DIR = ''
+    SOURCE = "Toys_and_Games"
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -78,8 +80,180 @@ def load_checkpoint(base_model_name, save_dir):
     return model, tokenizer
 
 
+@torch.no_grad()
+def evaluate_sequence_recall(
+    model,
+    tokenizer,
+    eval_loader,
+    num_beams=20,
+    max_new_tokens=7,
+    top_k_list=[1, 5, 10],
+    print_random_example=True,  # new flag
+):
+    """
+    Batched sequence-level recall evaluation.
 
-def train(model, tokenizer, train_dataset, eval_dataset, params):
+    Args:
+        model: Hugging Face causal LM
+        tokenizer: Hugging Face tokenizer
+        eval_dataset: list of dicts with 'prompt' and 'target' fields
+        batch_size: number of prompts per batch
+        num_beams: number of beams for beam search
+        max_new_tokens: maximum tokens to generate
+        top_k_list: which recalls to compute (e.g., [1,5,10])
+
+    Returns:
+        dict: {'recall_1': float, 'recall_5': float, ...}
+    """
+    model.eval()
+    device = model.device
+
+    # Initialize recall lists
+    recalls_dict = {k: [] for k in top_k_list}
+    printed = False  # track if we've printed already
+
+    # Process dataset in batches
+    for batch in tqdm(eval_loader, desc="Evaluating"):
+        prompts = batch["prompt"]
+        targets = batch["target"]
+
+        # Tokenize batch
+        inputs = tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(device)
+
+        batch_size = len(prompts)
+        max_k = max(top_k_list)
+
+        
+        # Generate sequences for the batch
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            num_beams=max(num_beams, max(top_k_list)),
+            num_return_sequences=max(top_k_list),
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+
+        # Reshape outputs: (batch_size, num_return_sequences, seq_len)
+        batch_outputs = outputs.view(batch_size, max(top_k_list), -1)
+
+        # Decode and compute top-k recall
+        for i in range(batch_size):
+            prompt_len = inputs["input_ids"].size(1)
+            decoded_outputs = [
+                tokenizer.decode(batch_outputs[i, k, prompt_len:], skip_special_tokens=True)
+                for k in range(max_k)
+            ]
+            # print(decoded_outputs)
+
+            hits = [1 if targets[i] in o else 0 for o in decoded_outputs]
+            for k in top_k_list:
+                recalls_dict[k].append(int(any(hits[:k])))
+
+
+        # ---- Print one random batch example ----
+        if print_random_example and not printed:
+            rand_idx = random.randint(0, batch_size - 1)
+            print("\n=== Random Example ===")
+            print(f"Prompt:\n{prompts[rand_idx]}")
+            print(f"Target:\n{targets[rand_idx]}")
+            for k, gen in enumerate(decoded_outputs[:5]):  # show top 5 generations
+                print(f"[Gen {k+1}] {gen}")
+            print("========================\n")
+            printed = True
+        # ----------------------------------------
+
+    # Compute mean recall
+    recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
+    return recalls_mean
+
+
+class GenerateEvalCallback(TrainerCallback):
+    def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps=1000):
+        self.trainer = trainer
+        self.eval_dataset = eval_dataset
+        self.tokenizer = tokenizer
+        self.eval_fn = eval_fn
+        self.eval_steps = eval_steps
+        self.batch_size = 8
+        self.best_metric = None  # Track best metric
+
+    def on_step_end(self, args, state, control, **kwargs):
+
+        # dynamically adjust evaluation frequency
+        if 8000 <= state.global_step:
+            eval_interval = 1000
+        else:
+            eval_interval = self.eval_steps
+
+        # Run every eval_steps
+        if state.global_step > 0 and state.global_step % eval_interval == 0:
+
+            # If running in DDP, shard the dataset using DistributedSampler
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                rank = torch.distributed.get_rank()
+                # print("Rank: ", rank)
+                sampler = DistributedSampler(self.eval_dataset, shuffle=False)
+            else:
+                rank = 0
+                sampler = None
+
+            # Create 
+            # small_dataset = Subset(self.eval_dataset, range(10))
+            eval_loader = DataLoader(
+                self.eval_dataset,
+                # small_dataset,
+                batch_size=self.batch_size,
+                sampler=sampler,
+                shuffle=False,
+                collate_fn=None  # or custom collate_fn if needed
+            )
+
+            # Wrap DataLoader in tqdm ONLY for rank 0
+            if rank == 0:
+                eval_loader = tqdm(eval_loader, desc=f"Evaluating step {state.global_step}")
+
+
+            # Run your custom generate-based eval
+            metrics = self.eval_fn(self.trainer.model, self.tokenizer, eval_loader)
+
+            # If DDP, reduce metrics across processes
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                for k in metrics:
+                    tensor = torch.tensor(metrics[k], device=self.trainer.model.device)
+                    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+                    metrics[k] = (tensor / torch.distributed.get_world_size()).item()
+
+            # Prefix metrics for consistency with Trainer logs
+            metrics = {f"eval_{k}": v for k, v in metrics.items()}
+            metrics["step"] = state.global_step
+
+            # Log to TensorBoard / WandB / etc.
+            self.trainer.log(metrics)
+
+            # Also print for visibility
+            if rank == 0:
+                print(f"\n[Custom generate eval @ step {state.global_step}] {metrics}")
+
+                # Save best model 
+                current_metric = metrics["eval_recall_5"]  
+                if (self.best_metric is None) or (current_metric > self.best_metric):
+                    self.best_metric = current_metric
+                    print(f"New best metric {current_metric:.4f}! Saving model...")
+                    output_dir = f"{args.output_dir}/best_checkpoint"
+                    self.trainer.save_model(output_dir)
+                    self.trainer.save_state()
+
+        return control
+
+
+
+def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
@@ -93,11 +267,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
-        # lr_scheduler_type="cosine_with_min_lr",  # can also try "cosine", "linear"
-        # lr_scheduler_kwargs={
-        #     "lr_floor": 1e-5,
-        # },
-        lr_scheduler_type="linear",
+        lr_scheduler_type="cosine",
         logging_steps=50,
         save_strategy="steps",
         metric_for_best_model="eval_loss",
@@ -117,8 +287,15 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
     lora_config = LoraConfig(
         r=params.LORA_RANK,                      # rank
         lora_alpha=params.LORA_RANK * params.LORA_RATIO,
-        # target_modules=["q_proj", "v_proj"],  # attention projections
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=[
+            "q_proj",
+            "gate_proj",
+            "v_proj",
+            "o_proj",
+            "k_proj",
+            "up_proj",
+            "down_proj"
+        ],
         lora_dropout=params.LORA_DROPOUT,
         bias="none",
         task_type=TaskType.CAUSAL_LM
@@ -140,8 +317,17 @@ def train(model, tokenizer, train_dataset, eval_dataset, params):
         data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer),  # use custom collator
     )
 
+    callback = GenerateEvalCallback(
+        trainer=trainer,
+        eval_dataset=gen_eval_dataset,
+        tokenizer=tokenizer,
+        eval_fn=evaluate_sequence_recall,
+        eval_steps=1000 
+    )
+    trainer.add_callback(callback)
 
     trainer.train()
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-18000")
 
 
 def main():
@@ -150,18 +336,20 @@ def main():
     parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
+    parser.add_argument("--LORA_RANK", type=int, default=16, help="Rank of LoRA adaptor")
     parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
     parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='think_sft_adaptor', help="Where to save the trained adaptor")
+    parser.add_argument("--SOURCE", type=str, default="Toys_and_Games", help="Source dataset to use for evaluation")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"{Params.SOURCE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
     Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
@@ -175,14 +363,34 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
 
-    train_dataset = train_thinking.ReasoningDataset("train", "sft")
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft")
-    for i in range(10):
-        print(eval_dataset[i]["labels"])
-        print(tokenizer.decode(eval_dataset[i]["labels"][eval_dataset[i]["labels"]!=-100]))
+    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Sports_and_Outdoors"])
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Sports_and_Outdoors"])
     
+    check_idx = 10
+    print(train_dataset[check_idx])
     
-    train(model, tokenizer, train_dataset, eval_dataset, Params)
+    print(eval_dataset[check_idx])
+    print(tokenizer.decode(eval_dataset[check_idx]["labels"][eval_dataset[check_idx]["labels"]!=-100]))
+
+    print(gen_eval_dataset[check_idx])
+
+    
+    SEED = 411
+    GEN_EVAL_SUBSET_SIZE = 7000
+    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    eval_dataset = Subset(eval_dataset, indices)
+    print(f"---Eval dataset size: {len(eval_dataset)}")
+
+    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    print(f"---Gen Eval dataset size: {len(eval_dataset)}")
+
+    
+    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
 
     
 if __name__ == "__main__":
