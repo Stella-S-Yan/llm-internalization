@@ -92,13 +92,7 @@ class SeqDataset(Dataset):
         self.data = []
 
         for src in sources:
-            if split == "train":
-                data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_train.bagz" )
-            elif split == "eval":
-                data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_eval.bagz" )
-            elif split == "test":
-                data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_test.bagz" )
-
+            data_path =  os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{src}_user_{split}.bagz" )
             data_reader = bagz.Reader(data_path)
 
             for r in data_reader:
