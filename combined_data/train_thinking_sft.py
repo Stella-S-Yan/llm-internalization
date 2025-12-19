@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers import TrainerCallback
 from torch.utils.data import Subset
+from transformers import DataCollatorForSeq2Seq
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -172,6 +173,8 @@ def evaluate_sequence_recall(
     recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
     return recalls_mean
 
+def no_processing_collator(batch):
+    return batch
 
 class GenerateEvalCallback(TrainerCallback):
     def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps=1000):
@@ -320,7 +323,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer),  # use custom collator
+        # data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer),  # use custom collator
+        data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100)
     )
 
     callback = GenerateEvalCallback(
@@ -328,7 +332,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         eval_datasets=gen_eval_datasets,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=1000 
+        eval_steps=1000,
+        eval_data_collator=lambda batch: train_thinking.gen_eval_collator(batch, tokenizer),
     )
     trainer.add_callback(callback)
 
@@ -372,9 +377,9 @@ def main():
     train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
     
-    gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
-    gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "grpo", ["Sports_and_Outdoors"])
-    gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
+    gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Toys_and_Games"])
+    gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Sports_and_Outdoors"])
+    gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Beauty"])
     
     check_idx = 10
     print(train_dataset[check_idx])
