@@ -28,10 +28,11 @@ from utils import bagz_utils
 class ReasoningDataset(Dataset):
     def __init__(self, split, datatype: str, sources):
         self.datatype = datatype
+
         self.data = []
         for src in sources:
             data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_think_data_{split}.bagz')
-            self.data.extend(bagz_utils.read_object(data_path))
+            self.data.extend(bagz_utils.read_record(data_path))
 
 
     def __len__(self):

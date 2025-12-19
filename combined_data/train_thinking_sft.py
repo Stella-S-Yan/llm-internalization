@@ -87,7 +87,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=7,
+    max_new_tokens=20,
     top_k_list=[5],
     print_random_example=True,  # new flag
 ):
@@ -115,8 +115,8 @@ def evaluate_sequence_recall(
 
     # Process dataset in batches
     for batch in tqdm(eval_loader, desc="Evaluating"):
-        prompts = batch["prompt"]
-        targets = batch["target"]
+        prompts = batch["gen_prompt"]
+        targets = batch["gen_target"]
 
         # Tokenize batch
         inputs = tokenizer(
@@ -174,7 +174,10 @@ def evaluate_sequence_recall(
     return recalls_mean
 
 def no_processing_collator(batch):
-    return batch
+    return {
+        key: [example[key] for example in batch]
+        for key in batch[0].keys()
+    }
 
 class GenerateEvalCallback(TrainerCallback):
     def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps=1000):
@@ -333,7 +336,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
         eval_steps=1000,
-        eval_data_collator=lambda batch: train_thinking.gen_eval_collator(batch, tokenizer),
+        eval_data_collator=lambda batch: no_processing_collator(batch),
     )
     trainer.add_callback(callback)
 
@@ -376,19 +379,15 @@ def main():
 
     train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
+    check_idx = 3
+    print(eval_dataset[check_idx])
+    print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
+
     
     gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Toys_and_Games"])
     gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Sports_and_Outdoors"])
     gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Beauty"])
     
-    check_idx = 10
-    print(train_dataset[check_idx])
-    
-    print(eval_dataset[check_idx])
-    print(tokenizer.decode(eval_dataset[check_idx]["labels"][eval_dataset[check_idx]["labels"]!=-100]))
-
-    print(gen_eval_dataset_1[check_idx])
-
     
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 6000

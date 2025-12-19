@@ -142,13 +142,24 @@ def do_the_work(tokenizer, split):
         # attention_mask = [1] * len(input_ids)
         labels = [-100] * result_start + input_ids[result_start:]
 
+        # data = {
+        #     "prompt": prompt,
+        #     "prompt_token_ids": torch.tensor(prompt_enc["input_ids"]),
+        #     "target": result,
+        #     "solution": solution,
+        #     "input_ids": torch.tensor(input_ids),
+        #     "labels": torch.tensor(labels),
+        #     "gen_prompt": gen_prompt,
+        #     "gen_target": gen_target
+        # }
+
         data = {
             "prompt": prompt,
-            "prompt_token_ids": torch.tensor(prompt_enc["input_ids"]),
+            "prompt_token_ids": prompt_enc["input_ids"],
             "target": result,
             "solution": solution,
-            "input_ids": torch.tensor(input_ids),
-            "labels": torch.tensor(labels),
+            "input_ids": input_ids,
+            "labels": labels,
             "gen_prompt": gen_prompt,
             "gen_target": gen_target
         }
@@ -156,7 +167,7 @@ def do_the_work(tokenizer, split):
         all_data.append(data)
 
     # Save data
-    bagz_utils.save_object(all_data, config.PROCESSED_DATA_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_data_{split}.bagz")
+    bagz_utils.save_record(all_data, config.PROCESSED_DATA_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_data_{split}.bagz")
 
 def main():
     # Only need to load tokenizer
