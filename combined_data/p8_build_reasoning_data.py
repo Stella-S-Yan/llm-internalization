@@ -82,7 +82,7 @@ def do_the_work(tokenizer, split):
         cats = [sid_to_cat.get(i) for i in sids]
         history_len = len(sids)
 
-        sid_cat_list = "\n".join(f"{cats[i]}" for i in range(len(sids)))
+        sid_cat_list = "\n".join(f"{sids[i]} : {cats[i]}" for i in range(len(sids)))
         target_sid_cat = sid_to_cat.get(target)
 
         prompt = PROMPT_TEMPLATE.format(
