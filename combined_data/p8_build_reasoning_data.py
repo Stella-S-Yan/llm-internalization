@@ -13,9 +13,10 @@ import re
 
 
 PROMPT_TEMPLATE = """
-[SFT:Think]
+<sft:think>
 user {uid}: {history}
-predict: {predict}
+prediction:\n
+{predict}
 """
 
 TARGET_TEMPLATE = """
@@ -26,6 +27,23 @@ TARGET_TEMPLATE = """
 <cat>{target_sid_cat}</cat>
 <sid>{target_sid}</sid>{eos}
 """
+
+GEN_PROMPT_TEMPLATE = """
+<sft:think>
+user {uid}: {history}
+prediction:\n
+<hsz>{history_len}</hsz>
+<hist>
+    {sid_cat_list}
+</hist>
+"""
+
+GEN_TARGET_TEMPLATE = """
+<cat>{target_sid_cat}</cat>
+<sid>{target_sid}</sid>{eos}
+"""
+
+
 PATTERN = r"A\d+\s+B\d+\s+C\d+\s+D\d+"
 
 def do_the_work(tokenizer, split):
@@ -51,12 +69,20 @@ def do_the_work(tokenizer, split):
         history = record["input"]
         target = record["target"]
 
+        # Prefix UID by data source
+        if config.REVIEW_TYPE == "Beauty":
+            uid = f"B_{uid}"
+        elif config.REVIEW_TYPE == "Toys_and_Games":
+            uid = f"T_{uid}"
+        elif config.REVIEW_TYPE == "Sports_and_Outdoors":
+            uid = f"S_{uid}"
+
         # sids = [x.strip() for x in history.split(";")]
         sids = re.findall(PATTERN, history)
         cats = [sid_to_cat.get(i) for i in sids]
         history_len = len(sids)
 
-        sid_cat_list = "\n".join(f"{i}: {cats[i]}" for i in range(len(sids)))
+        sid_cat_list = "\n".join(f"{cats[i]}" for i in range(len(sids)))
         target_sid_cat = sid_to_cat.get(target)
 
         prompt = PROMPT_TEMPLATE.format(
@@ -68,6 +94,19 @@ def do_the_work(tokenizer, split):
         result = TARGET_TEMPLATE.format(
             history_len=str(history_len),
             sid_cat_list=sid_cat_list,
+            target_sid_cat=target_sid_cat,
+            target_sid=target,
+            eos=tokenizer.eos_token
+        ).strip()
+
+        gen_prompt = GEN_PROMPT_TEMPLATE.format(
+            uid=uid,
+            history=history.strip(),
+            history_len=str(history_len),
+            sid_cat_list=sid_cat_list
+        ).strip()
+
+        gen_target = GEN_TARGET_TEMPLATE.format(
             target_sid_cat=target_sid_cat,
             target_sid=target,
             eos=tokenizer.eos_token
@@ -109,7 +148,9 @@ def do_the_work(tokenizer, split):
             "target": result,
             "solution": solution,
             "input_ids": torch.tensor(input_ids),
-            "labels": torch.tensor(labels)
+            "labels": torch.tensor(labels),
+            "gen_prompt": gen_prompt,
+            "gen_target": gen_target
         }
 
         all_data.append(data)
