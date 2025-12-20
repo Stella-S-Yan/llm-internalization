@@ -45,6 +45,7 @@ import random
 import os
 from functools import partial
 
+SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
 def ddp_init():
     if "RANK" in os.environ:
@@ -80,7 +81,7 @@ def evaluate_sequence_recall(
     device = next(model.parameters()).device
     
     # sid_pattern = re.compile(r"<sid>(.*?)</sid>")
-    sid_pattern = re.compile(r"<sid>(.*?)<")
+    
 
     # We now store only raw hits, not full lists
     local_hits = {k: 0 for k in top_k_list}
@@ -133,16 +134,13 @@ def evaluate_sequence_recall(
             ]
 
             # Extract <sid> from generated outputs
-            pred_sids = [
-                (m.group(1).strip() if (m := sid_pattern.search(t)) else None)
-                for t in generations
-            ]
+            # pred_sids = [
+            #     (m.group(1).strip() if (m := SID_PATTERN.search(t)) else None)
+            #     for t in generations
+            # ]
 
             # All levels
-            hits = [
-                1 if g is not None and solutions[i]['sid'] in g else 0
-                for g in pred_sids
-            ]
+            hits = [solutions[i]["sid"] in g for g in generations]
 
             for k in top_k_list:
                 # if any of the first k generations hits
@@ -167,11 +165,11 @@ def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
 
 
-def collate_fn(batch):
-    return {
-        "prompt_token_ids": [item["prompt_token_ids"] for item in batch],
-        "solution": [item["solution"] for item in batch],
-    }
+# def collate_fn(batch):
+#     return {
+#         "prompt_token_ids": [item["prompt_token_ids"] for item in batch],
+#         "solution": [item["solution"] for item in batch],
+#     }
 
 
 def collate_fn(batch):
@@ -203,7 +201,7 @@ def main():
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
   
     # --- Prepare dataset ---
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo")
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
     print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
     # eval_dataset = Subset(eval_dataset, range(32*8))
     print(gen_eval_dataset[0])
@@ -235,7 +233,7 @@ def main():
         tokenizer=tokenizer,
         eval_loader=eval_loader,
         num_beams=20,
-        max_new_tokens=126,
+        max_new_tokens=30,
         top_k_list=[1, 5, 10],
     )
 
