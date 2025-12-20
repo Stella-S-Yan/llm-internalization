@@ -63,8 +63,8 @@ class ReasoningDataset(Dataset):
             }
         elif self.datatype == "gen_eval":
             return {
-                "gen_prompt": record["gen_prompt"],
-                "gen_target": record["gen_target"]
+                "gen_prompt": record["prompt"],
+                "gen_target": record["target"]
             }
         else:
             raise ValueError(

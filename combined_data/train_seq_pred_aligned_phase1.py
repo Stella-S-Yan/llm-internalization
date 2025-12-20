@@ -44,7 +44,6 @@ class Params:
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     POLY_POW = 2.0
     ACC_STEP = 1
-    SOURCE = "Toys_and_Games"
 
 
 TEMPLATE = """
@@ -502,7 +501,6 @@ def main():
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
     parser.add_argument("--POLY_POW", type=float, default=2.0, help="Polynomial LR scheduler power")
-    parser.add_argument("--SOURCE", type=str, default="Toys_and_Games", help="Source dataset to use for evaluation")
 
     
 
@@ -511,7 +509,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"{Params.SOURCE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_cosine_combined"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_cosine_combined"
     Params.LOGGING_DIR =  config.RUN_DIR / "train_seq_pred_aligned_phase1" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")

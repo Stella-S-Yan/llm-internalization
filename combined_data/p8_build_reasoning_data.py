@@ -14,35 +14,16 @@ from tqdm import tqdm
 
 PROMPT_TEMPLATE = """
 <sft:think>
-user {uid}: {history}
+user {uid}:
+{sid_cat_list}
 prediction:\n
 {predict}
 """
 
 TARGET_TEMPLATE = """
-<hsz>{history_len}</hsz>
-<hist>
-    {sid_cat_list}
-</hist>
 <cat>{target_sid_cat}</cat>
 <sid>{target_sid}</sid>{eos}
 """
-
-GEN_PROMPT_TEMPLATE = """
-<sft:think>
-user {uid}: {history}
-prediction:\n
-<hsz>{history_len}</hsz>
-<hist>
-    {sid_cat_list}
-</hist>
-"""
-
-GEN_TARGET_TEMPLATE = """
-<cat>{target_sid_cat}</cat>
-<sid>{target_sid}</sid>{eos}
-"""
-
 
 PATTERN = r"A\d+\s+B\d+\s+C\d+\s+D\d+"
 
@@ -80,33 +61,17 @@ def do_the_work(tokenizer, split):
         # sids = [x.strip() for x in history.split(";")]
         sids = re.findall(PATTERN, history)
         cats = [sid_to_cat.get(i) for i in sids]
-        history_len = len(sids)
 
         sid_cat_list = "\n".join(f"{sids[i]} : {cats[i]}" for i in range(len(sids)))
         target_sid_cat = sid_to_cat.get(target)
 
         prompt = PROMPT_TEMPLATE.format(
             uid=uid,
-            history=history.strip(),
+            sid_cat_list=sid_cat_list,
             predict=""
         ).strip()
 
-        result = TARGET_TEMPLATE.format(
-            history_len=str(history_len),
-            sid_cat_list=sid_cat_list,
-            target_sid_cat=target_sid_cat,
-            target_sid=target,
-            eos=tokenizer.eos_token
-        ).strip()
-
-        gen_prompt = GEN_PROMPT_TEMPLATE.format(
-            uid=uid,
-            history=history.strip(),
-            history_len=str(history_len),
-            sid_cat_list=sid_cat_list
-        ).strip()
-
-        gen_target = GEN_TARGET_TEMPLATE.format(
+        target = TARGET_TEMPLATE.format(
             target_sid_cat=target_sid_cat,
             target_sid=target,
             eos=tokenizer.eos_token
@@ -120,15 +85,13 @@ def do_the_work(tokenizer, split):
         )
 
         result_enc = tokenizer(
-            result,
+            target,
             add_special_tokens=False,
             truncation=False,
             padding=False
         )
 
         solution = {
-            "hsz": history_len,
-            "hist": cats,
             "cat": target_sid_cat,
             "sid": target,
         }
@@ -137,31 +100,19 @@ def do_the_work(tokenizer, split):
         # For SFT
         input_ids = prompt_enc["input_ids"] + result_enc["input_ids"]
         # result starts immediately after prompt
-        result_start = len(prompt_enc["input_ids"])
+        target_start = len(prompt_enc["input_ids"])
 
         # attention_mask = [1] * len(input_ids)
-        labels = [-100] * result_start + input_ids[result_start:]
+        labels = [-100] * target_start + input_ids[target_start:]
 
-        # data = {
-        #     "prompt": prompt,
-        #     "prompt_token_ids": torch.tensor(prompt_enc["input_ids"]),
-        #     "target": result,
-        #     "solution": solution,
-        #     "input_ids": torch.tensor(input_ids),
-        #     "labels": torch.tensor(labels),
-        #     "gen_prompt": gen_prompt,
-        #     "gen_target": gen_target
-        # }
-
+        
         data = {
             "prompt": prompt,
             "prompt_token_ids": prompt_enc["input_ids"],
-            "target": result,
+            "target": target,
             "solution": solution,
             "input_ids": input_ids,
             "labels": labels,
-            "gen_prompt": gen_prompt,
-            "gen_target": gen_target
         }
 
         all_data.append(data)

@@ -25,10 +25,11 @@ from tqdm import tqdm
 from transformers import TrainerCallback
 from torch.utils.data import Subset
 from transformers import DataCollatorForSeq2Seq
+import re
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
+SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
 # Set seeds for reproducibility
 seed = 411
@@ -87,7 +88,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=20,
+    max_new_tokens=30,
     top_k_list=[5],
     print_random_example=True,  # new flag
 ):
@@ -151,8 +152,13 @@ def evaluate_sequence_recall(
                 for k in range(max_k)
             ]
             # print(decoded_outputs)
+            match = SID_PATTERN.search(targets[i])
+            if match:
+                sid_value = match.group(1)
+            else:
+                sid_value = "NONE"
 
-            hits = [1 if targets[i] in o else 0 for o in decoded_outputs]
+            hits = [1 if sid_value in o else 0 for o in decoded_outputs]
             for k in top_k_list:
                 recalls_dict[k].append(int(any(hits[:k])))
 
@@ -281,13 +287,13 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",
-        logging_steps=50,
+        logging_steps=500,
         save_strategy="steps",
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         save_total_limit=2,
         eval_strategy="steps",
-        eval_steps=500,
+        eval_steps=1000,
         optim="adamw_torch",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
         fp16=False,         # optional: if you want fp16 instead
@@ -341,8 +347,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
     )
     trainer.add_callback(callback)
 
-    trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-18000")
+    # trainer.train()
+    trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-5500")
 
 
 def main():
@@ -380,8 +386,12 @@ def main():
 
     train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
+
+    # train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
+    # eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Sports_and_Outdoors"])
     check_idx = 3
     print(eval_dataset[check_idx])
+    print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
     print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
 
     
