@@ -7,9 +7,9 @@ import config
 from utils import bagz_utils
 import bagz
 import json
-import torch
 import re
 from tqdm import tqdm
+from collections import Counter
 
 
 PROMPT_TEMPLATE = """
@@ -21,11 +21,33 @@ prediction:\n
 """
 
 TARGET_TEMPLATE = """
+<freq>{freq_A}</freq>
 <cat>{target_sid_cat}</cat>
 <sid>{target_sid}</sid>{eos}
 """
 
 PATTERN = r"A\d+\s+B\d+\s+C\d+\s+D\d+"
+
+
+def most_frequent_Ax(ids):
+    """
+    ids: list of strings like "A3 B5 C7 D2"
+    returns: most frequent Ax (e.g. "A3") or None
+    """
+    ax_list = [id_.split()[0] for id_ in ids]
+    counts = Counter(ax_list)
+
+    if not counts:
+        return None
+
+    most_common, freq = counts.most_common(1)[0]
+
+    # Check if it's strictly most frequent
+    if list(counts.values()).count(freq) > 1:
+        return None
+
+    return most_common
+
 
 def do_the_work(tokenizer, split):
 
@@ -62,6 +84,9 @@ def do_the_work(tokenizer, split):
         sids = re.findall(PATTERN, history)
         cats = [sid_to_cat.get(i) for i in sids]
 
+        # most frequent Ax
+        freq_A = most_frequent_Ax(sids)
+
         sid_cat_list = "\n".join(f"{sids[i]} : {cats[i]}" for i in range(len(sids)))
         target_sid_cat = sid_to_cat.get(target)
 
@@ -72,6 +97,7 @@ def do_the_work(tokenizer, split):
         ).strip()
 
         target = TARGET_TEMPLATE.format(
+            freq_A=freq_A,
             target_sid_cat=target_sid_cat,
             target_sid=target,
             eos=tokenizer.eos_token

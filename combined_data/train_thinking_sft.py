@@ -50,7 +50,6 @@ class Params:
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ADAPTOR_SAVE_DIR = ''
-    SOURCE = "Toys_and_Games"
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -347,8 +346,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
     )
     trainer.add_callback(callback)
 
-    # trainer.train()
-    trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-5500")
+    trainer.train()
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-5500")
 
 
 def main():
@@ -363,14 +362,13 @@ def main():
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='think_sft_adaptor', help="Where to save the trained adaptor")
-    parser.add_argument("--SOURCE", type=str, default="Toys_and_Games", help="Source dataset to use for evaluation")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"{Params.SOURCE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"Freq_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
     Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
