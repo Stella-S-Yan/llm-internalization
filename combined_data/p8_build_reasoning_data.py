@@ -70,7 +70,7 @@ def do_the_work(tokenizer, split):
         record = json.loads(record_bytes.decode())
         uid = record["uid"]
         history = record["input"]
-        target = record["target"]
+        target_sid = record["target"]
 
         # Prefix UID by data source
         if config.REVIEW_TYPE == "Beauty":
@@ -88,7 +88,7 @@ def do_the_work(tokenizer, split):
         freq_A = most_frequent_Ax(sids)
 
         sid_cat_list = "\n".join(f"{sids[i]} : {cats[i]}" for i in range(len(sids)))
-        target_sid_cat = sid_to_cat.get(target)
+        target_sid_cat = sid_to_cat.get(target_sid)
 
         prompt = PROMPT_TEMPLATE.format(
             uid=uid,
@@ -99,7 +99,7 @@ def do_the_work(tokenizer, split):
         target = TARGET_TEMPLATE.format(
             freq_A=freq_A,
             target_sid_cat=target_sid_cat,
-            target_sid=target,
+            target_sid=target_sid,
             eos=tokenizer.eos_token
         ).strip()
 
@@ -118,8 +118,9 @@ def do_the_work(tokenizer, split):
         )
 
         solution = {
+            "freq": freq_A,
             "cat": target_sid_cat,
-            "sid": target,
+            "sid": target_sid,
         }
 
 

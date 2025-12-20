@@ -178,11 +178,13 @@ def evaluate_sequence_recall(
     recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
     return recalls_mean
 
+
 def no_processing_collator(batch):
     return {
         key: [example[key] for example in batch]
         for key in batch[0].keys()
     }
+
 
 class GenerateEvalCallback(TrainerCallback):
     def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps, eval_data_collator):
@@ -269,8 +271,6 @@ class GenerateEvalCallback(TrainerCallback):
         return control
 
 
-
-
 def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
@@ -290,7 +290,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         save_strategy="steps",
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        save_total_limit=2,
+        save_total_limit=20,
         eval_strategy="steps",
         eval_steps=1000,
         optim="adamw_torch",
@@ -386,12 +386,14 @@ def main():
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
 
     # train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
-    # eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Sports_and_Outdoors"])
+    # eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Beauty"])
     check_idx = 3
     print(eval_dataset[check_idx])
     print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
     print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
 
+    # eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
+    # print(eval_dataset[0])
     
     gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Toys_and_Games"])
     gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Sports_and_Outdoors"])
