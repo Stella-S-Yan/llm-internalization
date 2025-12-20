@@ -180,7 +180,7 @@ def no_processing_collator(batch):
     }
 
 class GenerateEvalCallback(TrainerCallback):
-    def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps=1000):
+    def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps, eval_data_collator):
         self.trainer = trainer
         self.eval_datasets = eval_datasets
         self.tokenizer = tokenizer
@@ -188,6 +188,7 @@ class GenerateEvalCallback(TrainerCallback):
         self.eval_steps = eval_steps
         self.batch_size = 8
         self.best_metric = None  # Track best metric
+        self.eval_data_collator = eval_data_collator
 
     # def on_step_end(self, args, state, control, **kwargs):
     def on_evaluate(self, args, state, control, **kwargs):
@@ -218,7 +219,7 @@ class GenerateEvalCallback(TrainerCallback):
                     batch_size=self.batch_size,
                     sampler=sampler,
                     shuffle=False,
-                    collate_fn=None,  # or your custom collate_fn
+                    collate_fn=self.eval_data_collator,  # or your custom collate_fn
                 )
 
                 # tqdm only on rank 0
