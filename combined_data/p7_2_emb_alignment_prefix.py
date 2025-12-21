@@ -46,11 +46,11 @@ torch.backends.cudnn.benchmark = False
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment_prefix"
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
 BATCH_SIZE = 2048
 TOTAL_STEPS = 4_000     # plateau at step 2k
-LR =  1e-3         #  
+LR =  8e-6         #  
 SCHEDULE = 'cosine'
 
 # temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
@@ -105,8 +105,8 @@ class SIDDataset(Dataset):
         print("--- Use all items in meta_df. ")
 
         self.data = []
-        # review_types = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
-        review_types = ["Toys_and_Games"]
+        review_types = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
+        # review_types = ["Toys_and_Games"]
 
         for review_type in review_types:
             meta_df_path = os.path.join(
@@ -357,12 +357,17 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
 
     weight_map = {
         0: 0.0,   # negatives
-        1: 0.1,   # one-prefix positive
-        2: 0.5,   # two-prefix positive
+        1: 0.5,   # one-prefix positive
+        2: 0.8,   # two-prefix positive
         3: 0.9,   # three-prefix positive
-        4: 1.0    # exact positive
     }
     
+    # weight_map = {
+    #     0: 0.0,   # negatives
+    #     1: 0.43,   # one-prefix positive
+    #     2: 1.71,   # two-prefix positive
+    #     3: 1.93,   # three-prefix positive
+    # }
 
     evaluator = SIDRetrievalEvaluator(dataset, model, tokenizer, device=DEVICE)
     best_alignment = 0.0
@@ -421,10 +426,10 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
             D_idx = torch.tensor(D_idx_list, device=DEVICE)
 
             # -------- Prefix match matrix --------
-            exact = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
-                    (B_idx.unsqueeze(1) == B_idx.unsqueeze(0)) & \
-                    (C_idx.unsqueeze(1) == C_idx.unsqueeze(0)) & \
-                    (D_idx.unsqueeze(1) == D_idx.unsqueeze(0))
+            # exact = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
+            #         (B_idx.unsqueeze(1) == B_idx.unsqueeze(0)) & \
+            #         (C_idx.unsqueeze(1) == C_idx.unsqueeze(0)) & \
+            #         (D_idx.unsqueeze(1) == D_idx.unsqueeze(0))
             three_prefix = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
                          (B_idx.unsqueeze(1) == B_idx.unsqueeze(0)) & \
                          (C_idx.unsqueeze(1) == C_idx.unsqueeze(0)) & \
@@ -440,7 +445,7 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
             M[one_prefix] = 1
             M[two_prefix] = 2
             M[three_prefix] = 3
-            M[exact] = 4
+            # M[exact] = 4
 
             # -------- Similarity --------
             sim = (A_norm @ C_norm.T) / TEMP  # [B, B]
@@ -457,7 +462,7 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
                 weights = torch.ones_like(pos_sim, dtype=torch.float32)
                 # weights[(M[i][pos_mask] == 1)] *= 0.5  # 2-prefix weight
                 for k, v in weight_map.items():
-                    weights[M == k] = v
+                    weights[M[i][pos_mask] == k] = v
                 all_sim_exp = torch.exp(sim[i])
                 pos_sim_exp = torch.exp(pos_sim) * weights
                 loss_i = -torch.log(pos_sim_exp.sum() / all_sim_exp.sum())
