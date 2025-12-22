@@ -48,21 +48,17 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment_prefix"
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
-BATCH_SIZE = 2048
+BATCH_SIZE = 1024
 TOTAL_STEPS = 4_000     # plateau at step 2k
-LR =  8e-6         #  
+LR =  1e-4         #  
 SCHEDULE = 'cosine'
 
 # temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
-TEMP = 0.2     # high temperature: smoother distribution, softer gradients
-SCALE = 0.01    # Best
-WARMUP_UP = 400 
-POLY_POW = 2
-POLY_END_LR = 1e-6  # better than 1e-6 for Toys_and_Games
+WARMUP_UP = 800 
 
 
 # Create an informative run name
-RUN_NAME = f"prefix_scheduler{SCHEDULE}_{POLY_POW}_endlr_{POLY_END_LR}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_combined"
+RUN_NAME = f"prefix_scheduler{SCHEDULE}_lr{LR}_warmup{WARMUP_UP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_combined"
 
 
 def load_model_tokenizer(run_test: False):
@@ -101,6 +97,13 @@ def load_model_tokenizer(run_test: False):
 
 
 class SIDDataset(Dataset):
+    def select_rows(group):
+        if (group["has_review"] == 1).any():
+            # print("~~~ Has more rows with reviews in the group.")
+            return group[group["has_review"] == 1]
+        else:
+            return group.head(1)
+        
     def __init__(self):
         print("--- Use all items in meta_df. ")
 
@@ -132,7 +135,11 @@ class SIDDataset(Dataset):
             df = df.sort_values(["sid_prefix", "sid_D"], ascending=[True, True])
 
             # Keep ONLY the first row per prefix (i.e., the lowest D-index row)
-            df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
+            df = (
+                df.groupby("sid_prefix", group_keys=False)
+                .apply(SIDDataset.select_rows)
+                .reset_index(drop=True)
+            )
 
             print(f"--- After dropping duplicate sids: {df.shape[0]}")
 
@@ -334,14 +341,7 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
             num_warmup_steps=WARMUP_UP,
             num_training_steps=TOTAL_STEPS,
         )
-    elif SCHEDULE == "pow":
-        scheduler = get_polynomial_decay_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=WARMUP_UP,
-            num_training_steps=TOTAL_STEPS,
-            lr_end=POLY_END_LR,
-            power=POLY_POW
-        )
+
 
     model.to(DEVICE)
 
@@ -354,160 +354,139 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         drop_last=False
     )
 
-
-    weight_map = {
-        0: 0.0,   # negatives
-        1: 0.5,   # one-prefix positive
-        2: 0.8,   # two-prefix positive
-        3: 0.9,   # three-prefix positive
-    }
-    
-    # weight_map = {
-    #     0: 0.0,   # negatives
-    #     1: 0.43,   # one-prefix positive
-    #     2: 1.71,   # two-prefix positive
-    #     3: 1.93,   # three-prefix positive
-    # }
+    TEMP = 0.07          # contrastive temperature. CLIP default.  Low = very sharp softmax, strong pull between matched pairs
+    TAU_H = 0.3          # hierarchy softness (lower = stronger hierarchy). Low = hierarchy dominates. high =  hierarchy almost ignored. 
 
     evaluator = SIDRetrievalEvaluator(dataset, model, tokenizer, device=DEVICE)
+    
     best_alignment = 0.0
+    data_iter = itertools.cycle(dataloader)  # infinite iterator over dataloader
 
-    steps_per_epoch = len(dataloader)
-    total_epochs = (TOTAL_STEPS + steps_per_epoch - 1) // steps_per_epoch
-    global_step = 0
+    for global_step in range(TOTAL_STEPS):
 
-    for epoch in range(total_epochs):
-        epoch_pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{total_epochs}", unit="batch")
-        for batch in epoch_pbar:
-            if global_step >= TOTAL_STEPS:
-                break
+        batch = next(data_iter)  # sample one batch per step
 
-            # --- Forward pass ---
-            A_norm = batch["A_emb"].to(model.device, dtype=torch.bfloat16)
-            sid_text = batch["sid"]
+        # --- Forward pass ---
+        A_norm = batch["A_emb"].to(model.device, dtype=torch.bfloat16)
+        sid_text = batch["sid"]
+        B = len(sid_text)
 
-            # Tokenize SID text
-            inputs = tokenizer(
-                sid_text, return_tensors="pt", padding=True,
-                truncation=True, max_length=8
-            ).to(DEVICE)
+        # Tokenize SID text
+        inputs = tokenizer(sid_text, return_tensors="pt").to(DEVICE)
 
-            outputs = model(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                output_hidden_states=True
-            )
+        # Forward pass (frozen model)
+        outputs = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            output_hidden_states=True
+        )
 
-            # Mean-pooling for embedding
-            hidden_states = outputs.hidden_states[-1]  # [B, seq_len, H]
-            attention_mask_exp = inputs["attention_mask"].unsqueeze(-1)
-            masked_hidden = hidden_states * attention_mask_exp
-            sum_hidden = masked_hidden.sum(dim=1)
-            seq_lengths = attention_mask_exp.sum(dim=1)
-            C_batch = sum_hidden / seq_lengths
-            C_norm = F.normalize(C_batch, dim=1)
+        # Mean-pooling for embedding
+        hidden_states = outputs.hidden_states[-1]  # [B, seq_len, H]
+        attention_mask_exp = inputs["attention_mask"].unsqueeze(-1)
+        masked_hidden = hidden_states * attention_mask_exp
+        sum_hidden = masked_hidden.sum(dim=1)
+        seq_lengths = attention_mask_exp.sum(dim=1)
+        C_batch = sum_hidden / seq_lengths
+        C_norm = F.normalize(C_batch, dim=1)
 
-            # --- Parse A/B/C indices from SID text ---
-            A_idx_list, B_idx_list, C_idx_list, D_idx_list = [], [], [], []
-            for s in sid_text:
-                parts = [p.strip() for p in re.split(r"[ ,]", s) if p]
-                a = int(parts[0][1:])
-                b = int(parts[1][1:])
-                c = int(parts[2][1:])
-                d = int(parts[3][1:])
-                A_idx_list.append(a)
-                B_idx_list.append(b)
-                C_idx_list.append(c)
-                D_idx_list.append(d)
+        # --- Parse A/B/C indices from SID text ---
+        A_idx, B_idx, C_idx, D_idx = [], [], [], []
+        for s in sid_text:
+            parts = [p.strip() for p in re.split(r"[ ,]", s) if p]
+            A_idx.append(int(parts[0][1:]))
+            B_idx.append(int(parts[1][1:]))
+            C_idx.append(int(parts[2][1:]))
+            D_idx.append(int(parts[3][1:]))
 
-            A_idx = torch.tensor(A_idx_list, device=DEVICE)
-            B_idx = torch.tensor(B_idx_list, device=DEVICE)
-            C_idx = torch.tensor(C_idx_list, device=DEVICE)
-            D_idx = torch.tensor(D_idx_list, device=DEVICE)
+        A_idx = torch.tensor(A_idx, device=DEVICE)
+        B_idx = torch.tensor(B_idx, device=DEVICE)
+        C_idx = torch.tensor(C_idx, device=DEVICE)
+        D_idx = torch.tensor(D_idx, device=DEVICE)
 
-            # -------- Prefix match matrix --------
-            # exact = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
-            #         (B_idx.unsqueeze(1) == B_idx.unsqueeze(0)) & \
-            #         (C_idx.unsqueeze(1) == C_idx.unsqueeze(0)) & \
-            #         (D_idx.unsqueeze(1) == D_idx.unsqueeze(0))
-            three_prefix = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
-                         (B_idx.unsqueeze(1) == B_idx.unsqueeze(0)) & \
-                         (C_idx.unsqueeze(1) == C_idx.unsqueeze(0)) & \
-                         (D_idx.unsqueeze(1) != D_idx.unsqueeze(0))
-            two_prefix = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
-                         (B_idx.unsqueeze(1) == B_idx.unsqueeze(0)) & \
-                         (C_idx.unsqueeze(1) != C_idx.unsqueeze(0))
-            one_prefix = (A_idx.unsqueeze(1) == A_idx.unsqueeze(0)) & \
-                         (B_idx.unsqueeze(1) != B_idx.unsqueeze(0))
+        # -------------------------------------------------
+        # 4. Build hierarchy matrix H[i, j] ∈ {0..4}
+        # -------------------------------------------------
+        Aeq = A_idx[:, None] == A_idx[None, :]
+        Beq = B_idx[:, None] == B_idx[None, :]
+        Ceq = C_idx[:, None] == C_idx[None, :]
+        Deq = D_idx[:, None] == D_idx[None, :]
 
-            # 0 = negative, 1 = 3-prefix positive, 2 = 2-prefix positive, 3 = 3-predix positive, 4 = exact positive
-            M = torch.zeros((len(sid_text), len(sid_text)), device=DEVICE, dtype=torch.int8)
-            M[one_prefix] = 1
-            M[two_prefix] = 2
-            M[three_prefix] = 3
-            # M[exact] = 4
+        H = (
+            Aeq.int() +
+            (Aeq & Beq).int() +
+            (Aeq & Beq & Ceq).int() +
+            (Aeq & Beq & Ceq & Deq).int()
+        )  # [B, B], values 0..4
 
-            # -------- Similarity --------
-            sim = (A_norm @ C_norm.T) / TEMP  # [B, B]
-            diag_mask = torch.eye(len(sid_text), device=DEVICE).bool()
-            sim = sim.masked_fill(diag_mask, float('-inf'))
+        # Optional: strengthen exact matches
+        H = H + torch.eye(B, device=H.device) * 2.0
 
-            # -------- InfoNCE with multiple positives --------
-            loss_list = []
-            for i in range(len(sid_text)):
-                pos_mask = (M[i] > 0)
-                pos_sim = sim[i][pos_mask]
-                if pos_sim.numel() == 0:
-                    continue
-                weights = torch.ones_like(pos_sim, dtype=torch.float32)
-                # weights[(M[i][pos_mask] == 1)] *= 0.5  # 2-prefix weight
-                for k, v in weight_map.items():
-                    weights[M[i][pos_mask] == k] = v
-                all_sim_exp = torch.exp(sim[i])
-                pos_sim_exp = torch.exp(pos_sim) * weights
-                loss_i = -torch.log(pos_sim_exp.sum() / all_sim_exp.sum())
-                loss_list.append(loss_i)
+        # -------------------------------------------------
+        # 5. Soft hierarchy targets
+        # -------------------------------------------------
+        # Row-normalized soft targets
+        P = torch.softmax(H.float() / TAU_H, dim=1)  # [B, B]
 
-            loss = torch.stack(loss_list).mean()
+        # -------------------------------------------------
+        # 6. Contrastive logits
+        # -------------------------------------------------
+        logits = (A_norm @ C_norm.T) / TEMP  # [B, B]
 
-            # --- Backprop ---
-            loss.backward()
+        # -------------------------------------------------
+        # 7. Symmetric soft-label InfoNCE loss
+        # -------------------------------------------------
+        log_prob_A2C = F.log_softmax(logits, dim=1)
+        log_prob_C2A = F.log_softmax(logits.T, dim=1)
+
+        loss_A2C = -(P * log_prob_A2C).sum(dim=1).mean()
+        loss_C2A = -(P.T * log_prob_C2A).sum(dim=1).mean()
+
+        loss = 0.5 * (loss_A2C + loss_C2A)
+
+        # --- Backprop ---
+        loss.backward()
+        with torch.no_grad():
+            if emb.weight.grad is not None:
+                emb.weight.grad[:old_vocab_size] = 0
+
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
+
+        # log LR
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar("train/lr", current_lr, global_step)
+
+        # Evaluation
+        if global_step > 0 and global_step % 50 == 0:
+            # log
+            print(f"Step {global_step}- train/loss: {loss.item()}")
+
+            model.eval()
             with torch.no_grad():
-                if emb.weight.grad is not None:
-                    emb.weight.grad[:old_vocab_size] = 0
+                mean_alignment, recall, ndcg = evaluator.evaluate(topk=(1, 5, 10), num_negatives=99)
+            print(f"Step {global_step}: Alignment={mean_alignment:.4f}, Recall@1={recall['top1_acc']:.4f}, Recall@5={recall['top5_acc']:.4f}, Recall@10={recall['top10_acc']:.4f}")
+            writer.add_scalar("eval/alignment", mean_alignment, global_step)
+            writer.add_scalar("eval/recall@1", recall["top1_acc"], global_step)
+            writer.add_scalar("eval/recall@5", recall["top5_acc"], global_step)
+            writer.add_scalar("eval/recall@10", recall["top10_acc"], global_step)
+            writer.add_scalar("eval/ndcg@1", ndcg["ndcg@1"], global_step)
+            writer.add_scalar("eval/ndcg@5", ndcg["ndcg@5"], global_step)
+            writer.add_scalar("eval/ndcg@10", ndcg["ndcg@10"], global_step)
+            model.train()
 
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+            # if recall["top10_acc"] > best_recall:
+            #     best_recall = recall["top10_acc"]
+            #     save_model(model, tokenizer, old_vocab_size)
+            #     print(f"model saved for recal@10 = {best_recall}")
 
-            # --- Logging ---
-            epoch_pbar.set_postfix({"loss": f"{loss.item():.4f}", "step": global_step})
-            writer.add_scalar("train/loss", loss.item(), global_step)
-            writer.add_scalar("train/lr", optimizer.param_groups[0]['lr'], global_step)
-
-            # --- Evaluation ---
-            if global_step > 0 and global_step % 50 == 0:
-                model.eval()
-                with torch.no_grad():
-                    mean_alignment, recall, ndcg = evaluator.evaluate(topk=(1,5,10), num_negatives=99)
-                model.train()
-
-                writer.add_scalar("eval/alignment", mean_alignment, global_step)
-                writer.add_scalar("eval/recall@1", recall["top1_acc"], global_step)
-                writer.add_scalar("eval/recall@5", recall["top5_acc"], global_step)
-                writer.add_scalar("eval/recall@10", recall["top10_acc"], global_step)
-                writer.add_scalar("eval/ndcg@1", ndcg["ndcg@1"], global_step)
-                writer.add_scalar("eval/ndcg@5", ndcg["ndcg@5"], global_step)
-                writer.add_scalar("eval/ndcg@10", ndcg["ndcg@10"], global_step)
-
-                if mean_alignment > best_alignment:
-                    best_alignment = mean_alignment
-                    save_model(model, tokenizer, old_vocab_size)
-                    print(f"Model saved at step {global_step} for alignment = {best_alignment}")
-
-            global_step += 1
-
-
+            if mean_alignment > best_alignment:
+                best_alignment = mean_alignment
+                save_model(model, tokenizer, old_vocab_size)
+                print(f"model saved for alignment = {best_alignment}")
+            
+        writer.add_scalar("train/loss", loss.item(), global_step)
 
 
 
