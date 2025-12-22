@@ -49,7 +49,7 @@ MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alig
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
 BATCH_SIZE = 1024
 TOTAL_STEPS = 4_000     # plateau at step 2k
-LR =  1e-4         #  
+LR =  1e-6         #  
 SCHEDULE = 'cosine'
 
 # temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
@@ -353,59 +353,75 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         drop_last=False
     )
 
-    TEMP = 0.07          # contrastive temperature. CLIP default.  Low = very sharp softmax, strong pull between matched pairs
-    TAU_H = 0.3          # hierarchy softness (lower = stronger hierarchy). Low = hierarchy dominates. high =  hierarchy almost ignored. 
-
     evaluator = SIDRetrievalEvaluator(dataset, model, tokenizer, device=DEVICE)
+
+    weight_map = {
+        1: 0.3,   # 1-prefix
+        2: 0.6,   # 2-prefix
+        3: 0.9,   # 3-prefix
+        4: 1.0,   # exact
+    }
+    TEMP = 0.2          # contrastive temperature. CLIP default.  Low = very sharp softmax, strong pull between matched pairs
+    TAU_H = 0.3          # hierarchy softness (lower = stronger hierarchy). Low = hierarchy dominates. high =  hierarchy almost ignored. 
+    EPS = 1e-8
     
     best_alignment = 0.0
     data_iter = itertools.cycle(dataloader)  # infinite iterator over dataloader
 
     for global_step in range(TOTAL_STEPS):
 
-        batch = next(data_iter)  # sample one batch per step
+        batch = next(data_iter)
 
-        # --- Forward pass ---
-        A_norm = batch["A_emb"].to(model.device, dtype=torch.bfloat16)
+        # --------------------------------------------------
+        # 1. Text embeddings (frozen, already normalized)
+        # --------------------------------------------------
+        A_norm = batch["A_emb"].to(model.device)   # [B, H]
         sid_text = batch["sid"]
         B = len(sid_text)
 
-        # Tokenize SID text
-        inputs = tokenizer(sid_text, return_tensors="pt").to(DEVICE)
+        # --------------------------------------------------
+        # 2. Encode SID tokens (trainable)
+        # --------------------------------------------------
+        inputs = tokenizer(
+            sid_text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=8
+        ).to(model.device)
 
-        # Forward pass (frozen model)
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             output_hidden_states=True
         )
 
-        # Mean-pooling for embedding
-        hidden_states = outputs.hidden_states[-1]  # [B, seq_len, H]
-        attention_mask_exp = inputs["attention_mask"].unsqueeze(-1)
-        masked_hidden = hidden_states * attention_mask_exp
-        sum_hidden = masked_hidden.sum(dim=1)
-        seq_lengths = attention_mask_exp.sum(dim=1)
-        C_batch = sum_hidden / seq_lengths
-        C_norm = F.normalize(C_batch, dim=1)
+        hidden = outputs.hidden_states[-1]                 # [B, L, H]
+        mask = inputs["attention_mask"].unsqueeze(-1)      # [B, L, 1]
 
-        # --- Parse A/B/C indices from SID text ---
+        pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1)
+        C_norm = F.normalize(pooled, dim=1)                 # [B, H]
+
+        # --------------------------------------------------
+        # 3. Parse SID hierarchy indices
+        # --------------------------------------------------
         A_idx, B_idx, C_idx, D_idx = [], [], [], []
+
         for s in sid_text:
-            parts = [p.strip() for p in re.split(r"[ ,]", s) if p]
+            parts = [p for p in re.split(r"[ ,]", s) if p]
             A_idx.append(int(parts[0][1:]))
             B_idx.append(int(parts[1][1:]))
             C_idx.append(int(parts[2][1:]))
             D_idx.append(int(parts[3][1:]))
 
-        A_idx = torch.tensor(A_idx, device=DEVICE)
-        B_idx = torch.tensor(B_idx, device=DEVICE)
-        C_idx = torch.tensor(C_idx, device=DEVICE)
-        D_idx = torch.tensor(D_idx, device=DEVICE)
+        A_idx = torch.tensor(A_idx, device=model.device)
+        B_idx = torch.tensor(B_idx, device=model.device)
+        C_idx = torch.tensor(C_idx, device=model.device)
+        D_idx = torch.tensor(D_idx, device=model.device)
 
-        # -------------------------------------------------
-        # 4. Build hierarchy matrix H[i, j] ∈ {0..4}
-        # -------------------------------------------------
+        # --------------------------------------------------
+        # 4. Shared-prefix matrix H[i, j] ∈ {0..4}
+        # --------------------------------------------------
         Aeq = A_idx[:, None] == A_idx[None, :]
         Beq = B_idx[:, None] == B_idx[None, :]
         Ceq = C_idx[:, None] == C_idx[None, :]
@@ -416,30 +432,49 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
             (Aeq & Beq).int() +
             (Aeq & Beq & Ceq).int() +
             (Aeq & Beq & Ceq & Deq).int()
-        )  # [B, B], values 0..4
+        )  # [B, B]
 
-        # Optional: strengthen exact matches
-        H = H + torch.eye(B, device=H.device) * 2.0
+        # --------------------------------------------------
+        # 5. Positive mask and weights (ABSOLUTE)
+        # --------------------------------------------------
+        pos_mask = (H > 0)                                  # positives only
+        diag = torch.eye(B, device=H.device, dtype=torch.bool)
+        pos_mask = pos_mask & (~diag)                       # exclude self
 
-        # -------------------------------------------------
-        # 5. Soft hierarchy targets
-        # -------------------------------------------------
-        # Row-normalized soft targets
-        P = torch.softmax(H.float() / TAU_H, dim=1)  # [B, B]
+        W = torch.zeros_like(H, dtype=torch.float32)
+        for k, v in weight_map.items():
+            W[H == k] = v
 
-        # -------------------------------------------------
+        # Optional (recommended): normalize weights per anchor
+        W = W / (W.sum(dim=1, keepdim=True) + EPS)
+
+        # --------------------------------------------------
         # 6. Contrastive logits
-        # -------------------------------------------------
-        logits = (A_norm @ C_norm.T) / TEMP  # [B, B]
+        # --------------------------------------------------
+        A_norm = A_norm.float()
+        C_norm = C_norm.float()
+        logits = (A_norm @ C_norm.T) / TEMP                 # [B, B]
+        exp_logits = torch.exp(logits)
 
-        # -------------------------------------------------
-        # 7. Symmetric soft-label InfoNCE loss
-        # -------------------------------------------------
-        log_prob_A2C = F.log_softmax(logits, dim=1)
-        log_prob_C2A = F.log_softmax(logits.T, dim=1)
+        # --------------------------------------------------
+        # 7. A → C weighted multi-positive InfoNCE
+        # --------------------------------------------------
+        num = (exp_logits * W * pos_mask).sum(dim=1)
+        den = exp_logits.sum(dim=1)
 
-        loss_A2C = -(P * log_prob_A2C).sum(dim=1).mean()
-        loss_C2A = -(P.T * log_prob_C2A).sum(dim=1).mean()
+        loss_A2C = -torch.log((num + EPS) / (den + EPS))
+        loss_A2C = loss_A2C[~torch.isnan(loss_A2C)].mean()
+
+        # --------------------------------------------------
+        # 8. C → A symmetric direction
+        # --------------------------------------------------
+        exp_logits_T = exp_logits.T
+
+        num_T = (exp_logits_T * W.T * pos_mask.T).sum(dim=1)
+        den_T = exp_logits_T.sum(dim=1)
+
+        loss_C2A = -torch.log((num_T + EPS) / (den_T + EPS))
+        loss_C2A = loss_C2A[~torch.isnan(loss_C2A)].mean()
 
         loss = 0.5 * (loss_A2C + loss_C2A)
 
