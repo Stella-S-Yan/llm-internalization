@@ -8,17 +8,7 @@ vLLM does not work with DDP, so don't use torchrun
 vLLM is used as a python kernel, and one is initiated for each gpu. To launch the script
 $ python eval_think_sft.py
 
-With Reasoning SFT, achieves this result
-Beauty:
-Global Recall: {1: np.float64(0.021777042436166884), 5: np.float64(0.05330232974109019), 10: np.float64(0.0727541027590216)}
-Global Recall: {1: np.float64(0.02164289227742253), 5: np.float64(0.05213969503197245), 10: np.float64(0.0724858024415329)}
 
-Toy:
-Global Recall: {1: np.float64(0.01859674428188749), 5: np.float64(0.04435400783020812), 10: np.float64(0.06192046157016279)}
-sample 1024
-Global Recall: {1: np.float64(0.017578125), 5: np.float64(0.052734375), 10: np.float64(0.072265625)}
-400
-Global Recall: {1: np.float64(0.015), 5: np.float64(0.055), 10: np.float64(0.0675)}
 """
 
 # spawn creates a fresh Python process instead of forking.
@@ -31,7 +21,7 @@ multiprocessing.set_start_method("spawn", force=True)
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, Subset, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.utils.rnn import pad_sequence
 
 # Needs to import vllm before torch
@@ -40,10 +30,8 @@ import config
 import train_thinking
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
-import numpy as np
 import random
 import os
-from functools import partial
 
 SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
@@ -80,9 +68,6 @@ def evaluate_sequence_recall(
     # Pick device from the model's first parameter
     device = next(model.parameters()).device
     
-    # sid_pattern = re.compile(r"<sid>(.*?)</sid>")
-    
-
     # We now store only raw hits, not full lists
     local_hits = {k: 0 for k in top_k_list}
     local_total = 0
@@ -163,13 +148,6 @@ def evaluate_sequence_recall(
 
 def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
-
-
-# def collate_fn(batch):
-#     return {
-#         "prompt_token_ids": [item["prompt_token_ids"] for item in batch],
-#         "solution": [item["solution"] for item in batch],
-#     }
 
 
 def collate_fn(batch):
