@@ -26,7 +26,6 @@ import os
 import itertools
 from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
 import numpy as np
-import faiss
 from tqdm import tqdm
 import re
 
