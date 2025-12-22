@@ -62,6 +62,7 @@ def load_checkpoint(base_model_name, save_dir):
 
     # 2. Load extended tokenizer
     tokenizer = AutoTokenizer.from_pretrained(save_dir)
+    tokenizer.padding_side = "left"
 
     old_vocab_size = model.get_input_embeddings().weight.shape[0]
     new_vocab_size = len(tokenizer)
