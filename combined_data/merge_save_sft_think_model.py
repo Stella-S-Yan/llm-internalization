@@ -51,6 +51,18 @@ def main(checkpoint_step):
     # Merge adapter weights as vLLM does not support PEFT models directly
     merged_model = adapter_model.merge_and_unload()  # returns standard HF model
 
+    # --- redundant, but can keep ----
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    print("--- Tokenizer: ", tokenizer.pad_token, tokenizer.pad_token_id)
+    model.config.pad_token = tokenizer.pad_token
+    model.config.pad_token_id = tokenizer.pad_token_id
+    tokenizer.padding_side='left'
+
+    print(model.config)
+    # ------------------------------------
     print(f"Restored think SFT model with extended vocabulary")
 
     save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_merged_think_sft_model"
