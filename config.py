@@ -12,8 +12,11 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed_data"
 MODEL_DIR = DATA_DIR / "model"
 RUN_DIR = DATA_DIR / "runs"
 
-DATA_SOURCE = "Amazon"
-REVIEW_TYPE = "Sports_and_Outdoors"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
+DATA_SOURCE = "Lepard"
+REVIEW_TYPE = "one"
+
+# DATA_SOURCE = "Amazon"
+# REVIEW_TYPE = "Sports_and_Outdoors"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
 
 time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
@@ -53,18 +56,10 @@ META_W_SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid_
 META_W_EMB_SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid_two_embed_meta_df.bagz")
 
 
+LEPARD_OUTSIDE_EMB = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_outside_emb_df.bagz")
 
 
 
-SID2ITEM = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid2item.bagz")
-ITEM2SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_item2sid.bagz")
-
-TOKENIZER = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_tokenizer.bagz")
-TOKENIZER_TXT = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_tokenizer.bagz")
-
-IID2EMBEDDING = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_iid_to_embedding.bagz")
-
-SID_MATRIX = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid_matrix.bagz")
 META_W_TEXT = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_text_meta_df.bagz")
 RQVAE_CHECKPOINT_DIR= os.path.join(MODEL_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_rqvae")
 TRAIN_LOSS_PLOT = os.path.join(MODEL_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_rqvae_train.png")
@@ -76,13 +71,3 @@ MAX_EVAL_LEN = 10
 
 
 
-LEPARD_W_EMBEDDING_TRAIN = os.path.join(PROCESSED_DATA_DIR, f"lepard_embedding_df_train.bagz")
-LEPARD_W_EMBEDDING_DEV = os.path.join(PROCESSED_DATA_DIR, f"lepard_embedding_df_dev.bagz")
-LEPARD_W_EMBEDDING_TEST = os.path.join(PROCESSED_DATA_DIR, f"lepard_embedding_df_test.bagz")
-
-LEPARD_W_SID_TRAIN = os.path.join(PROCESSED_DATA_DIR, f"lepard_sid_df_train.bagz")
-LEPARD_W_SID_DEV = os.path.join(PROCESSED_DATA_DIR, f"lepard_sid_df_dev.bagz")
-LEPARD_W_SID_TEST = os.path.join(PROCESSED_DATA_DIR, f"lepard_sid_df_test.bagz")
-
-LEPARD_RQVAE_CHECKPOINT_DIR= os.path.join(MODEL_DIR, f"lepard_rqvae")
-LEPARD_TRAIN_LOSS_PLOT = os.path.join(MODEL_DIR, f"lepard_rqvae_train.png")
