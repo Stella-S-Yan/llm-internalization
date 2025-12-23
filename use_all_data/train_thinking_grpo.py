@@ -283,7 +283,7 @@ def main():
     print(vars(Params))
 
     # Load model + tokenizer
-    model_input_dir = config.MODEL_DIR / "think_model_sft"
+    model_input_dir = config.MODEL_DIR / "Amazon_Combined_merged_think_sft_model"
     model, tokenizer = merge_save_load_model.load_model(model_input_dir)
     old_vocab_size = 128_256
 
