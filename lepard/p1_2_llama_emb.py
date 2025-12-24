@@ -10,9 +10,8 @@ from utils import bagz_utils
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
-# ---------------------------------------------------
+
 # Embedding functions
-# ---------------------------------------------------
 @torch.no_grad()
 def get_embedding_last_token(texts, model, tokenizer, device, normalize=True):
     """
@@ -37,13 +36,14 @@ def get_embedding_last_token(texts, model, tokenizer, device, normalize=True):
     if normalize:
         embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
 
-    return embedding.cpu()
+    return embedding.cpu().numpy()
 
 
-def embed_col(model, tokenizer, df, col_name, new_col_name, device, batch_size=256):
+def embed_col(model, tokenizer, df, col_name, device, batch_size=256):
     """
     Embed a column in batches on a single GPU.
     Truncates destination_context to last 512 characters.
+    Returns embeddings as a numpy array.
     """
     embeddings = []
 
@@ -55,23 +55,21 @@ def embed_col(model, tokenizer, df, col_name, new_col_name, device, batch_size=2
             batch_texts = batch_texts.tolist()
 
         emb_batch = get_embedding_last_token(batch_texts, model, tokenizer, device)
-        embeddings.extend(emb_batch)
+        embeddings.append(emb_batch)
 
         del emb_batch
         torch.cuda.empty_cache()
 
-    df[new_col_name] = [e.tolist() for e in embeddings]
-    return df
+    return np.vstack(embeddings)  # shape [num_rows, hidden_dim]
 
-# ---------------------------------------------------
+
 # GPU worker
-# ---------------------------------------------------
-def run_on_gpu(gpu_id, df_split, quote_split):
+def run_on_gpu(gpu_id, dest_df, quote_df, out_prefix):
     torch.cuda.set_device(gpu_id)
     device = torch.device(f"cuda:{gpu_id}")
     print(f"[GPU {gpu_id}] Running on {device}")
 
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map={"": device}, torch_dtype=torch.float16)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map={"": device}, dtype=torch.float16)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -79,66 +77,87 @@ def run_on_gpu(gpu_id, df_split, quote_split):
     model.eval()
 
     # 1️ Embed destination_context
-    df_split = embed_col(model, tokenizer, df_split, "destination_context", "destination_context_llama", device)
+    dest_texts = dest_df["destination_context"]
+    dest_emb = embed_col(model, tokenizer, dest_df, "destination_context", device)
+    np.save(f"{out_prefix}_dest_emb_{gpu_id}.npy", dest_emb)
+    np.save(f"{out_prefix}_dest_row_ids_{gpu_id}.npy", dest_df["row_id"].to_numpy())
 
-    # 2️ Embed quote (unique passage_id rows)
-    quote_split = embed_col(model, tokenizer, quote_split, "quote", "quote_llama", device)
+    # 2️ Embed quote (unique passage_id)
+    quote_texts = quote_df["quote"]
+    quote_emb = embed_col(model, tokenizer, quote_df, "quote", device)
+    np.save(f"{out_prefix}_quote_emb_{gpu_id}.npy", quote_emb)
+    np.save(f"{out_prefix}_quote_row_ids_{gpu_id}.npy", quote_df["row_id"].to_numpy())
 
-    # 3️ Save partial results
-    fname = config.LEPARD_TWO_EMB
-    bagz_utils.save_parquet(df_split, f"{fname}_dest_{gpu_id}")
-    bagz_utils.save_parquet(quote_split, f"{fname}_quote_{gpu_id}")
+    print(f"[GPU {gpu_id}] Finished embedding and saved shards")
 
-    print(f"[GPU {gpu_id}] Finished. Saved splits")
 
-# ---------------------------------------------------
+# Merge shards into single .npy files
+def merge_shards(out_prefix, n_gpus, col_prefix):
+    """
+    col_prefix: "dest" or "quote"
+    """
+    all_embs = []
+    all_ids = []
+
+    for gpu_id in range(n_gpus):
+        emb = np.load(f"{out_prefix}_{col_prefix}_emb_{gpu_id}.npy")
+        ids = np.load(f"{out_prefix}_{col_prefix}_row_ids_{gpu_id}.npy")
+        all_embs.append(emb)
+        all_ids.append(ids)
+
+    all_embs = np.vstack(all_embs)
+    all_ids = np.concatenate(all_ids)
+
+    # reorder by row_id
+    order = np.argsort(all_ids)
+    all_embs = all_embs[order]
+    all_ids = all_ids[order]
+
+    np.save(f"{out_prefix}_{col_prefix}_emb.npy", all_embs.astype(np.float32))
+    np.save(f"{out_prefix}_{col_prefix}_row_ids.npy", all_ids)
+    print(f"Merged {col_prefix} embeddings saved: {out_prefix}_{col_prefix}_emb.npy")
+
+
 # Main pipeline
-# ---------------------------------------------------
 def gen_embedding():
     try:
         set_start_method("spawn", force=True)
     except RuntimeError:
         pass
 
-    # 1️ Load full dataframe
-    df = bagz_utils.read_parquet(config.LEPARD_OUTSIDE_EMB)
+    # Load data (already has row_id)
+    meta_df = pd.read_parquet(config.LEPARD_DEST_DF)
+    quote_df = meta_df[["passage_id", "quote", "row_id"]].drop_duplicates(subset="passage_id", keep="first").reset_index(drop=True)
 
-    # 2️ Deduplicate quotes by passage_id
-    quote_df = df[["passage_id", "quote"]].drop_duplicates(subset="passage_id", keep="first").reset_index(drop=True)
 
-    # 3️ Split both dataframes for multi-GPU
     n_gpus = torch.cuda.device_count()
-    dest_splits = np.array_split(df, n_gpus)
+    dest_splits = np.array_split(meta_df, n_gpus)
     quote_splits = np.array_split(quote_df, n_gpus)
 
-    # 4️ Launch GPU processes
+    out_prefix = config.LEPARD_LLM_EMB
+
+    # Launch GPU processes
     procs = []
     for gpu_id in range(n_gpus):
-        p = Process(target=run_on_gpu, args=(gpu_id, dest_splits[gpu_id], quote_splits[gpu_id]))
+        p = Process(target=run_on_gpu, args=(gpu_id, dest_splits[gpu_id], quote_splits[gpu_id], out_prefix))
         p.start()
         procs.append(p)
-
     for p in procs:
         p.join()
 
-    # 5️ Merge partial results
-    # Destination_context
-    dest_dfs = [bagz_utils.read_parquet(f"{config.LEPARD_TWO_EMB}_dest_{i}") for i in range(n_gpus)]
-    full_df = pd.concat(dest_dfs, ignore_index=True)
+    # Merge shards
+    merge_shards(out_prefix, n_gpus, "dest")
+    merge_shards(out_prefix, n_gpus, "quote")
 
-    # Quote embeddings
-    quote_dfs = [bagz_utils.read_parquet(f"{config.LEPARD_TWO_EMB}_quote_{i}") for i in range(n_gpus)]
-    quote_df_full = pd.concat(quote_dfs, ignore_index=True)
-
-    # 6️ Merge quote embeddings back
-    full_df = full_df.merge(quote_df_full[["passage_id", "quote_llama"]], on="passage_id", how="left")
-
-    # 7️ Save final dataframe
-    bagz_utils.save_parquet(full_df, config.LEPARD_TWO_EMB)
-    print("All embeddings completed and saved!")
-
-# ---------------------------------------------------
 # Entrypoint
-# ---------------------------------------------------
 if __name__ == "__main__":
     gen_embedding()
+
+
+
+#  Use the embeddings later, save for quote
+# meta_df = pd.read_parquet(...)
+# dest_emb = np.load("llama_dest_emb.npy", mmap_mode="r")
+
+# row_id = meta_df.loc[i, "row_id"]
+# vector = dest_emb[row_id]
