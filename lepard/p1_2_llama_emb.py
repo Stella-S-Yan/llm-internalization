@@ -77,13 +77,11 @@ def run_on_gpu(gpu_id, dest_df, quote_df, out_prefix):
     model.eval()
 
     # 1️ Embed destination_context
-    dest_texts = dest_df["destination_context"]
     dest_emb = embed_col(model, tokenizer, dest_df, "destination_context", device)
     np.save(f"{out_prefix}_dest_emb_{gpu_id}.npy", dest_emb)
     np.save(f"{out_prefix}_dest_row_ids_{gpu_id}.npy", dest_df["row_id"].to_numpy())
 
     # 2️ Embed quote (unique passage_id)
-    quote_texts = quote_df["quote"]
     quote_emb = embed_col(model, tokenizer, quote_df, "quote", device)
     np.save(f"{out_prefix}_quote_emb_{gpu_id}.npy", quote_emb)
     np.save(f"{out_prefix}_quote_row_ids_{gpu_id}.npy", quote_df["row_id"].to_numpy())
