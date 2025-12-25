@@ -35,7 +35,7 @@ def _restore_model():
     return model
 
 
-def _process_emb(model, raw_item_embeddings, save_path_name, etype):
+def _process_emb(model, raw_item_embeddings, etype):
 
     total_items = raw_item_embeddings.shape[0]
     print(f"--- Encoding all items: {total_items}")
@@ -46,7 +46,6 @@ def _process_emb(model, raw_item_embeddings, save_path_name, etype):
     reconstructions, codebook_indices, usage_ratios = model(all_data, False)
     emb_idxs = jnp.argmax(codebook_indices, axis=-1).squeeze()
 
-    # Prepare has_review flags
     collision_resolved_emb, stats = format_sid.assign_sequential_group_ids_with_stats(emb_idxs, total_items=total_items, has_review_flags=np.ones(total_items, dtype=int))
     print("Stats: ", stats)
     print(f"---- # sids: {len(collision_resolved_emb)}")
@@ -54,8 +53,9 @@ def _process_emb(model, raw_item_embeddings, save_path_name, etype):
     if etype == "dest":
         formatted_sids = [append_prefix_sid(x) for x in collision_resolved_emb]
         df = pd.read_parquet(config.LEPARD_DEST_DF)
-        df['formatted_sid'] = formatted_sids
-        df.to_parquet(config.LEPART_SID)
+        df['dest_formatted_sid'] = formatted_sids
+        # print(df.head(3))
+        df.to_parquet(config.LEPARD_SID)
 
     elif etype == "quote":
         formatted_sids = [append_prefix_sid(x) for x in collision_resolved_emb]
@@ -63,29 +63,24 @@ def _process_emb(model, raw_item_embeddings, save_path_name, etype):
         df = pd.read_parquet(config.LEPARD_SID)
 
         quote_df = pd.read_parquet(config.LEPARD_QUOTE_DF)
-        quote_df['formatted_sid'] = formatted_sids
-
+        quote_df['quote_formatted_sid'] = formatted_sids
         df = df.merge(quote_df, on='passage_id', how='left')
+        # print(df.head(3))
         df.to_parquet(config.LEPARD_SID)
 
         
-
-
-
 def gen_sid():
     model = _restore_model()
 
     # destination_emb
     dest_emb = np.load(config.LEPARD_OUTSIDE_EMB + "_dest_gte.npy", mmap_mode="r")
-    save_path_name = config.LEPART_SID
     logger.info(f"Total rows: {dest_emb.shape[0]}")
-    _process_emb(model, dest_emb, save_path_name, etype="dest")
+    _process_emb(model, dest_emb, etype="dest")
 
     # quote_emb
     quote_emb = np.load(config.LEPARD_OUTSIDE_EMB + "_quote_gte.npy", mmap_mode="r")
-    save_path_name = config.LEPART_SID
     logger.info(f"Total rows: {quote_emb.shape[0]}")
-    _process_emb(model, quote_emb, save_path_name, etype="quote")
+    _process_emb(model, quote_emb, etype="quote")
 
 if __name__=="__main__":
     gen_sid()

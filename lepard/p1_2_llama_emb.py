@@ -6,7 +6,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from multiprocessing import Process, set_start_method
 from tqdm import tqdm
 import config
-from utils import bagz_utils
+import os
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -84,7 +84,7 @@ def run_on_gpu(gpu_id, dest_df, quote_df, out_prefix):
     # 2️ Embed quote (unique passage_id)
     quote_emb = embed_col(model, tokenizer, quote_df, "quote", device)
     np.save(f"{out_prefix}_quote_emb_{gpu_id}.npy", quote_emb)
-    np.save(f"{out_prefix}_quote_row_ids_{gpu_id}.npy", quote_df["row_id"].to_numpy())
+    np.save(f"{out_prefix}_quote_row_ids_{gpu_id}.npy", quote_df["passage_id"].to_numpy())
 
     print(f"[GPU {gpu_id}] Finished embedding and saved shards")
 
@@ -99,7 +99,7 @@ def merge_shards(out_prefix, n_gpus, col_prefix):
 
     for gpu_id in range(n_gpus):
         emb = np.load(f"{out_prefix}_{col_prefix}_emb_{gpu_id}.npy")
-        ids = np.load(f"{out_prefix}_{col_prefix}_row_ids_{gpu_id}.npy")
+        ids = np.load(f"{out_prefix}_{col_prefix}_row_ids_{gpu_id}.npy", allow_pickle=True)
         all_embs.append(emb)
         all_ids.append(ids)
 
@@ -115,6 +115,12 @@ def merge_shards(out_prefix, n_gpus, col_prefix):
     np.save(f"{out_prefix}_{col_prefix}_row_ids.npy", all_ids)
     print(f"Merged {col_prefix} embeddings saved: {out_prefix}_{col_prefix}_emb.npy")
 
+    # cleanup shard files
+    for gpu_id in range(n_gpus):
+        os.remove(f"{out_prefix}_{col_prefix}_emb_{gpu_id}.npy")
+        os.remove(f"{out_prefix}_{col_prefix}_row_ids_{gpu_id}.npy")
+    print("Cleaned up shard files.")
+
 
 # Main pipeline
 def gen_embedding():
@@ -126,7 +132,6 @@ def gen_embedding():
     # Load data (already has row_id)
     meta_df = pd.read_parquet(config.LEPARD_DEST_DF)
     quote_df = meta_df[["passage_id", "quote", "row_id"]].drop_duplicates(subset="passage_id", keep="first").reset_index(drop=True)
-
 
     n_gpus = torch.cuda.device_count()
     dest_splits = np.array_split(meta_df, n_gpus)

@@ -18,7 +18,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import config
 from utils import bagz_utils
-from torch.utils.data import Dataset, DataLoader, RandomSampler
+from torch.utils.data import Dataset, DataLoader, RandomSampler, ConcatDataset
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import random
@@ -26,6 +26,8 @@ import os
 import itertools
 from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
 import numpy as np
+import pandas as pd
+from collections import defaultdict
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
@@ -43,23 +45,20 @@ torch.backends.cudnn.benchmark = False
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
-LOG_DIR = config.RUN_DIR / "all_sid_alignment"
-BATCH_SIZE = 2048
-TOTAL_STEPS = 4_000     # plateau at step 2k
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_all_sid_alignment"
+LOG_DIR = config.RUN_DIR / "Lepard_all_sid_alignment"
+BATCH_SIZE = 128
+TOTAL_STEPS = 8_000     # plateau at step 2k
 LR =  6e-3         #  
 SCHEDULE = 'cosine'
 
 # temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
 TEMP = 0.2     # high temperature: smoother distribution, softer gradients
-SCALE = 0.01    # Best
 WARMUP_UP = 400
-POLY_POW = 2
-POLY_END_LR = 1e-6  # better than 1e-6 for Toys_and_Games
 
 
 # Create an informative run name
-RUN_NAME = f"scheduler{SCHEDULE}_endlr_{POLY_END_LR}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_combined"
+RUN_NAME = f"scheduler{SCHEDULE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_combined"
 
 
 def load_model_tokenizer(run_test: False):
@@ -98,71 +97,46 @@ def load_model_tokenizer(run_test: False):
 
 
 class SIDDataset(Dataset):
-
-    def select_rows(group):
-        if (group["has_review"] == 1).any():
-            # print("~~~ Has more rows with reviews in the group.")
-            return group[group["has_review"] == 1]
-        else:
-            return group.head(1)
+    def __init__(self, df, emb_type):
         
+        check_idx = 111
+        self.emb_type = emb_type
+        out_prefix = config.LEPARD_LLM_EMB
 
-    def __init__(self):
-        print("--- Use all items in meta_df. ")
+        self.emb = np.load(f"{out_prefix}_{emb_type}_emb.npy", mmap_mode="r")
+        row_ids = np.load(f"{out_prefix}_{emb_type}_row_ids.npy", allow_pickle=True)
 
-        self.data = []
-        review_types = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
-        # review_types = ["Toys_and_Games"]
+        if emb_type == "dest":
+            id_to_formatted = dict(zip(df["row_id"], df["dest_formatted_sid"]))
 
-        for review_type in review_types:
-            meta_df_path = os.path.join(
-                config.PROCESSED_DATA_DIR,
-                f"{config.DATA_SOURCE}_{review_type}_sid_embed_all_text_meta_df.bagz"
-            )
-            meta_df = bagz_utils.read_parquet(meta_df_path)
+            # Reorder formatted_sid according to row_ids
+            self.sids = [id_to_formatted[rid] for rid in row_ids]
+        elif emb_type == "quote":
+            tmp = defaultdict(set)
+            for pid, sid in zip(df["passage_id"], df["quote_formatted_sid"]):
+                tmp[pid].add(sid)
 
-            # Keep rows where (has_review==1) OR (description/title nonempty)
-            df = meta_df.loc[
-                (meta_df["has_review"] == 1) |
-                ((meta_df["description"] != "") & (meta_df["title"] != ""))
-            ].copy()
-            print(f"--- Original rows: {meta_df.shape[0]}, after filtering bad description + title: {df.shape[0]}")
+            conflicts = {k: v for k, v in tmp.items() if len(v) > 1}
+            assert not conflicts, f"Conflicting mappings found: {conflicts}"
 
-            # Extract prefix: first 3 SID tokens
-            df["sid_prefix"] = df["formatted_sid"].str.split().str[:3].str.join(" ")
+            id_to_formatted = {k: next(iter(v)) for k, v in tmp.items()}
+            self.sids = [id_to_formatted[rid] for rid in row_ids]
 
-            # Extract D index (remove the 'D' prefix and convert to int)
-            df["sid_D"] = df["formatted_sid"].str.split().str[3].str[1:].astype(int)
+            passage_id = row_ids[check_idx]
+            sid_value = df.loc[df["passage_id"] == passage_id, "quote_formatted_sid"].iloc[0]
+            assert sid_value == self.sids[check_idx], f"Mismatch at index {check_idx}: {sid_value} vs {self.sids[check_idx]}"
 
-            # Sort inside each semantic group by D index ascending
-            df = df.sort_values(["sid_prefix", "sid_D"], ascending=[True, True])
-
-            # Keep ONLY the first row per prefix (i.e., the lowest D-index row)
-            # df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
-            df = (
-                df.groupby("sid_prefix", group_keys=False)
-                .apply(SIDDataset.select_rows)
-                .reset_index(drop=True)
-            )
-
-            print(f"--- After dropping duplicate sids: {df.shape[0]}")
-
-            # train on all four levels
-            self.data.extend(df[["llama_embedding", "formatted_sid"]].values.tolist())
-            # train on 3 levels
-            # self.data.extend(df[["llama_embedding", "sid_prefix"]].values.tolist())
-
-
-        print(f"--- Training data size: {len(self.data)}") # 42,382, 664,413
 
     def __len__(self):
-        return len(self.data)
+        return len(self.sids)
+    
 
     def __getitem__(self, idx):
-        item = self.data[idx]
+        
         return {
-            "A_emb": torch.tensor(item[0], dtype=torch.float32),
-            "sid": item[1]
+            "A_emb": torch.from_numpy(self.emb[idx]),
+            "sid": self.sids[idx],
+            "type": self.emb_type
         }
 
 
@@ -276,7 +250,6 @@ class SIDRetrievalEvaluator:
         return mean_alignment, recall_results, ndcg_results
 
 
-
 def save_model(model, tokenizer, old_vocab_size):
     save_dir = MODEL_SAVE_DIR
     os.makedirs(save_dir, exist_ok=True)
@@ -290,7 +263,6 @@ def save_model(model, tokenizer, old_vocab_size):
     torch.save(new_emb, os.path.join(save_dir, "new_embeddings.pt"))
 
     print(f"Saved tokenizer + new embeddings at: {save_dir}")
-
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -368,13 +340,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     data_iter = itertools.cycle(dataloader)  # infinite iterator over dataloader
 
     for global_step in range(TOTAL_STEPS):
-        # if global_step == 400:
-        #     for g in optimizer.param_groups:
-        #         g["lr"] *= SCALE
-        
-        # if global_step == 1200:
-        #     for g in optimizer.param_groups:
-        #         g["lr"] *= SCALE
 
         batch = next(data_iter)  # sample one batch per step
         
@@ -383,7 +348,8 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         sid_text = batch["sid"]       # list of SID strings
 
         # Tokenize SID strings
-        inputs = tokenizer(sid_text, return_tensors="pt", max_length=8).to(DEVICE)
+        inputs = tokenizer(sid_text, return_tensors="pt", padding=True,
+            truncation=True, max_length=8).to(DEVICE)
 
         # Forward pass (frozen model)
         outputs = model(input_ids=inputs["input_ids"],
@@ -464,19 +430,21 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         writer.add_scalar("train/loss", loss.item(), global_step)
 
 
-
 def main():
     
     writer = SummaryWriter(log_dir=f"{LOG_DIR}/{RUN_NAME}")
 
     model, tokenizer, old_vocab_size = load_model_tokenizer(run_test=True)
-    
-    dataset = SIDDataset()
-    for i in range(5):
-        print(dataset[i]["sid"])
+
+    df = pd.read_parquet(config.LEPARD_SID) # contain sid
+
+    dest_dataset = SIDDataset(df, emb_type="dest")
+    quote_dataset = SIDDataset(df, emb_type="quote")
+
+    combined_ds = ConcatDataset([dest_dataset, quote_dataset])
     
     # Train
-    train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer)
+    train_sid_embeddings(model, combined_ds, tokenizer, old_vocab_size, writer)
     
     
 if __name__ == "__main__":

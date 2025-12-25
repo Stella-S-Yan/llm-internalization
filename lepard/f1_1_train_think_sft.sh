@@ -1,0 +1,16 @@
+#!/bin/bash
+set +e
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# Combined
+runs=(
+    "--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 --TRAIN_BATCH_SIZE 4 --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 150000"  # Best result. Keep
+)
+
+
+for params in "${runs[@]}"; do
+  echo "Starting run with: $params"
+  torchrun --nproc_per_node=8 train_thinking_sft.py $params
+  echo "Finished run with: $params"
+done
