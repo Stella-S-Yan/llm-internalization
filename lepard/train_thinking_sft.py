@@ -48,10 +48,9 @@ class Params:
 
 PROMPT_TEMPLATE = """
 <sft:think>
-<dcite> {dest_cite} </dcite>
-<dname> {dest_name} </dname>
 <dcourt>  {dest_court} <dcourt>
 <ddate> {dest_date} </ddate>
+<dname> {dest_name} </dname>
 <dsid> {dest_formatted_sid} </dsid>
 
 quote:
@@ -59,10 +58,9 @@ quote:
 """
 
 TARGET_TEMPLATE = """
-<scite> {source_cite} </scite>
-<sname> {source_name} </sname>
 <scourt>  {source_court} <scourt>
 <sdate> {source_date} </sdate>
+<sname> {source_name} </sname>
 <ssid> {quote_formatted_sid} </ssid>{eos}
 """
 
@@ -120,7 +118,6 @@ class LepardDataset(Dataset):
         record = self.df.iloc[idx]
 
         prompt_text = PROMPT_TEMPLATE.format(
-            dest_cite=record["dest_cite"],
             dest_name=record["dest_name"],
             dest_court=record["dest_court"],
             dest_date=record["dest_date"],
@@ -129,7 +126,6 @@ class LepardDataset(Dataset):
         ).strip()
         
         target_text = TARGET_TEMPLATE.format(
-            source_cite=record["source_cite"],
             source_name=record["source_name"],
             source_court=record["source_court"],
             source_date=record["source_date"],
