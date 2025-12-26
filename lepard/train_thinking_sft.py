@@ -503,8 +503,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     )
     trainer.add_callback(callback)
 
-    trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_train_seq_pred_aligned_phase1/checkpoint-18000")
+    # trainer.train()
+    trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor/checkpoint-102000")
 
 
 def main():
