@@ -39,7 +39,7 @@ def get_embedding_last_token(texts, model, tokenizer, device, normalize=True):
     return embedding.cpu().numpy()
 
 
-def embed_col(model, tokenizer, df, col_name, device, batch_size=256):
+def embed_col(model, tokenizer, df, col_name, device, batch_size=128):
     """
     Embed a column in batches on a single GPU.
     Truncates destination_context to last 512 characters.

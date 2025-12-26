@@ -98,17 +98,26 @@ def load_checkpoint(base_model_name, save_dir):
 
 class LepardDataset(Dataset):
 
-    def __init__(self, tokenizer, split):
+    def __init__(self, tokenizer, split, dataset_type="50k"):
 
         self.tokenizer = tokenizer
 
         if split == "train":
-            self.df = pd.read_parquet(config.LEPARD_TRAIN)
+            self.df = pd.read_parquet(config.LEPARD_50k_TRAIN)
         elif split == "eval":
-            self.df = pd.read_parquet(config.LEPARD_EVAL)
+            if dataset_type == "50k":
+                self.df = pd.read_parquet(config.LEPARD_50k_EVAL)
+            elif dataset_type == "20k": 
+                self.df = pd.read_parquet(config.LEPARD_20k_EVAL)
+            elif dataset_type == "10k":
+                self.df = pd.read_parquet(config.LEPARD_10k_EVAL)
         elif split == "test":
-            self.df = pd.read_parquet(config.LEPARD_TEST)
-
+            if dataset_type == "50k":
+                self.df = pd.read_parquet(config.LEPARD_50k_TEST)
+            elif dataset_type == "20k": 
+                self.df = pd.read_parquet(config.LEPARD_20k_TEST)
+            elif dataset_type == "10k":
+                self.df = pd.read_parquet(config.LEPARD_10k_TEST)
 
     def __len__(self):
         return self.df.shape[0]
@@ -158,14 +167,24 @@ class LepardDataset(Dataset):
 
 class LepardGenDataset(Dataset):
 
-    def __init__(self, split):
+    def __init__(self, split, dataset_type="50k"):
 
         if split == "train":
-            self.df = pd.read_parquet(config.LEPARD_TRAIN)
+            self.df = pd.read_parquet(config.LEPARD_50k_TRAIN)
         elif split == "eval":
-            self.df = pd.read_parquet(config.LEPARD_EVAL)
+            if dataset_type == "50k":
+                self.df = pd.read_parquet(config.LEPARD_50k_EVAL)
+            elif dataset_type == "20k": 
+                self.df = pd.read_parquet(config.LEPARD_20k_EVAL)
+            elif dataset_type == "10k":
+                self.df = pd.read_parquet(config.LEPARD_10k_EVAL)
         elif split == "test":
-            self.df = pd.read_parquet(config.LEPARD_TEST)
+            if dataset_type == "50k":
+                self.df = pd.read_parquet(config.LEPARD_50k_TEST)
+            elif dataset_type == "20k": 
+                self.df = pd.read_parquet(config.LEPARD_20k_TEST)
+            elif dataset_type == "10k":
+                self.df = pd.read_parquet(config.LEPARD_10k_TEST)
 
 
     def __len__(self):
@@ -441,10 +460,10 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",
-        logging_steps=500,
+        logging_steps=1000,
         save_strategy="steps",
         save_steps=2000,
-        save_total_limit=10,
+        save_total_limit=20,
         load_best_model_at_end=False,
         eval_strategy="steps",
         eval_steps=1000,
@@ -503,8 +522,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     )
     trainer.add_callback(callback)
 
-    # trainer.train()
-    trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor/checkpoint-102000")
+    trainer.train()
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor/checkpoint-102000")
 
 
 def main():
@@ -545,11 +564,11 @@ def main():
     old_vocab_size = 128_256
     print(tokenizer.eos_token)
     
-    train_dataset = LepardDataset(tokenizer, "train")
-    eval_dataset = LepardDataset(tokenizer, "eval")  
+    train_dataset = LepardDataset(tokenizer, "train", dataset_type="50k")
+    eval_dataset = LepardDataset(tokenizer, "eval", dataset_type="50k")  
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-    gen_eval_dataset = LepardGenDataset("eval")
+    gen_eval_dataset = LepardGenDataset("eval", dataset_type="50k")
 
     print(train_dataset[0])
     print(tokenizer.decode([x for x in train_dataset[0]["labels"] if x != -100]))

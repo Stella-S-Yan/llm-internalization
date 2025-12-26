@@ -58,7 +58,7 @@ WARMUP_UP = 400
 
 
 # Create an informative run name
-RUN_NAME = f"scheduler{SCHEDULE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_combined"
+RUN_NAME = f"combined_scheduler{SCHEDULE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
 
 
 def load_model_tokenizer(run_test: False):

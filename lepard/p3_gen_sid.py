@@ -34,6 +34,21 @@ def _restore_model():
     logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_Combined_all_rqvae')}")
     return model
 
+def _batched_encode(model, data, batch_size=512):
+    all_codes = []
+    all_usage = []
+
+    for i in range(0, len(data), batch_size):
+        batch = jnp.array(data[i:i + batch_size])
+
+        _, codebook_indices, usage_ratios = model(batch, False)
+
+        emb_idxs = jnp.argmax(codebook_indices, axis=-1)
+        all_codes.append(emb_idxs)
+        all_usage.append(usage_ratios)
+
+    return jnp.concatenate(all_codes, axis=1), all_usage
+
 
 def _process_emb(model, raw_item_embeddings, etype):
 
@@ -43,8 +58,11 @@ def _process_emb(model, raw_item_embeddings, etype):
     all_data = jnp.array(raw_item_embeddings)
 
     # Generate semantic id
-    reconstructions, codebook_indices, usage_ratios = model(all_data, False)
-    emb_idxs = jnp.argmax(codebook_indices, axis=-1).squeeze()
+    # reconstructions, codebook_indices, usage_ratios = model(all_data, False)
+    # emb_idxs = jnp.argmax(codebook_indices, axis=-1).squeeze()
+
+    emb_idxs, usage_ratios = _batched_encode(model, raw_item_embeddings, batch_size=512)
+    print(usage_ratios)
 
     collision_resolved_emb, stats = format_sid.assign_sequential_group_ids_with_stats(emb_idxs, total_items=total_items, has_review_flags=np.ones(total_items, dtype=int))
     print("Stats: ", stats)

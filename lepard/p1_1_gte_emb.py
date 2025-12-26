@@ -37,7 +37,7 @@ def encode_texts_multi_gpu(texts, model, pool, batch_size=1024):
 # Main embedding pipeline
 def gen_embedding():
     # 1️ Load data
-    df = pd.read_csv(config.DATA_DIR / config.DATA_SOURCE / "top_10000_data.csv")
+    df = pd.read_csv(config.DATA_DIR / config.DATA_SOURCE / "top_50000_data.csv")
     df = df.reset_index(drop=True)
 
     # Stable row id (CRITICAL)
