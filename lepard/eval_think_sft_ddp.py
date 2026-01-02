@@ -23,6 +23,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.utils.rnn import pad_sequence
+import argparse
 
 # Needs to import vllm before torch
 from tqdm import tqdm
@@ -151,10 +152,21 @@ def collate_fn(batch):
         "solution": [x["solution"] for x in batch]
     }
 
-    
+
+class Params:
+    DATA_TYPE = "10k"
+
 
 def main():
+    parser = argparse.ArgumentParser(description="Training configuration")
 
+    parser.add_argument("--DATA_TYPE", type=str, default="20k", help="Lepard evaluation datatype")
+
+    args = parser.parse_args()
+
+    for key, value in vars(args).items():
+        setattr(Params, key, value)
+    
     local_rank, device = ddp_init()
     
     # --- assign devices via vLLM ---
@@ -174,7 +186,8 @@ def main():
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
   
     # --- Prepare dataset ---
-    gen_eval_dataset = train_thinking_sft.LepardGenDataset("eval")
+    print(f"---- Eval on {Params.DATA_TYPE} dataset ----")
+    gen_eval_dataset = train_thinking_sft.LepardGenDataset("eval", dataset_type=Params.DATA_TYPE)
     print(f"Eval on : {len(gen_eval_dataset)} data points.")
     # eval_dataset = Subset(eval_dataset, range(32*8))
     print(gen_eval_dataset[0])

@@ -62,5 +62,5 @@ split_sets(df_20k, dataset_type="20k")
 
 df2 = pd.read_csv(config.DATA_DIR / config.DATA_SOURCE / "top_10000_data.csv")
 df_10k = df.merge(df2[cols], on=cols, how="inner")
-split_sets(df_20k, dataset_type="10k")
+split_sets(df_10k, dataset_type="10k")
 
