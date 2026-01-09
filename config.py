@@ -12,14 +12,22 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed_data"
 MODEL_DIR = DATA_DIR / "model"
 RUN_DIR = DATA_DIR / "runs"
 
-DATA_SOURCE = "Lepard"
-REVIEW_TYPE = "one"
+DATA_SOURCE = "MovieLens"
+REVIEW_TYPE = "1m"
+
+# DATA_SOURCE = "Lepard"
+# REVIEW_TYPE = "one"
 
 # DATA_SOURCE = "Amazon"
-# REVIEW_TYPE = "Sports_and_Outdoors"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
+# REVIEW_TYPE = "Toys_and_Games"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
 
 time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
+
+MOVIELES_REVEIW_DATASET = os.path.join(DATA_DIR, "MovieLens", "ml-1m", "ratings.dat")
+MOVIELES_USERS_DATASET = os.path.join(DATA_DIR, "MovieLens", "ml-1m", "users.dat")
+MOVIELES_MOVIES_DATASET = os.path.join(DATA_DIR, "MovieLens", "ml-1m", "movies.dat")
+
 
 AMAZON_REVIEW_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"reviews_{REVIEW_TYPE}_5.json") 
 AMAZON_META_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"meta_{REVIEW_TYPE}.json")
@@ -72,6 +80,14 @@ LEPARD_20k_TEST = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}
 
 LEPARD_10k_EVAL = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_10k_eval_df.parquet")
 LEPARD_10k_TEST = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_10k_test_df.parquet")
+
+
+ML_DF = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_row_id_df.parquet")
+ML_OUTSIDE_EMB = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_outside_emb")
+ML_LLM_EMB = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_llm_emb")
+ML_TWO_EMB = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_two_emb_df.bagz")
+ML_SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid_df.parquet")
+
 
 
 META_W_TEXT = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_text_meta_df.bagz")

@@ -138,7 +138,7 @@ def train():
             "num_embeddings": 256,
             "embedding_dim": 16,
             "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": 1.0,     # Increase commitment_cost will depress quant_loss
+            "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
             "data_variance": data_variance,
         }
     }

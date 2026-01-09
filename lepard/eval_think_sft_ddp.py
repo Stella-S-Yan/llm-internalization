@@ -187,7 +187,7 @@ def main():
   
     # --- Prepare dataset ---
     print(f"---- Eval on {Params.DATA_TYPE} dataset ----")
-    gen_eval_dataset = train_thinking_sft.LepardGenDataset("eval", dataset_type=Params.DATA_TYPE)
+    gen_eval_dataset = train_thinking_sft.LepardGenDataset("test", dataset_type=Params.DATA_TYPE)
     print(f"Eval on : {len(gen_eval_dataset)} data points.")
     # eval_dataset = Subset(eval_dataset, range(32*8))
     print(gen_eval_dataset[0])
