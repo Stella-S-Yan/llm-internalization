@@ -4,6 +4,7 @@ Pregenerate all possible subsequences and create a fixed training dataset
 
 import config
 from utils import bagz_utils
+import random
 
 
 
@@ -41,7 +42,6 @@ class GenFixedData():
 
         # Test
         sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        # sid_seq = sid_seq[-config.MAX_EVAL_LEN:]
         input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.test_data.append( {
                 "uid": uid,
@@ -52,8 +52,7 @@ class GenFixedData():
 
         # Eval
         sid_seq = record["sequence"][:-1]
-        sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
-        # sid_seq = sid_seq[-config.MAX_EVAL_LEN:]
+        sid_seq = sid_seq[-config.MAX_HISTORY_LEN+1:]
         input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.eval_data.append( {
                 "uid": uid,
@@ -78,9 +77,14 @@ class GenFixedData():
 
 
     def _save_data(self):
+        rng = random.Random(411)
+        rng.shuffle(self.train_eval_data)
         bagz_utils.save_record(self.train_eval_data, config.TRAIN_EVAL_DATA)
+        rng.shuffle(self.train_data)
         bagz_utils.save_record(self.train_data, config.TRAIN_DATA)
+        rng.shuffle(self.eval_data)
         bagz_utils.save_record(self.eval_data, config.EVAL_DATA)
+        rng.shuffle(self.test_data)
         bagz_utils.save_record(self.test_data, config.TEST_DATA)
     
 
