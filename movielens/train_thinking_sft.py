@@ -26,7 +26,7 @@ import os
 import random
 import pandas as pd
 import re
-from transformers import DataCollatorForSeq2Seq
+from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
 from combined_data import train_thinking
 from accelerate import Accelerator
 
@@ -292,9 +292,10 @@ class SaveBestModelCallback(TrainerCallback):
 
 
 class IterableTrainer(Trainer):
-    def __init__(self, train_loader=None, *args, **kwargs):
+    def __init__(self, train_loader=None, eval_loader=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._train_loader = train_loader  # store the pre-wrapped DataLoader
+        self._eval_loader = eval_loader
 
     def get_train_dataloader(self):
         # Return the pre-wrapped DataLoader
@@ -302,6 +303,13 @@ class IterableTrainer(Trainer):
             # Fallback to default behavior if not passed
             return super().get_train_dataloader()
         return self._train_loader
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        # use your custom eval loader if provided
+        if self._eval_loader is not None:
+            return self._eval_loader
+        # fallback to default behavior, passing eval_dataset
+        return super().get_eval_dataloader(eval_dataset)
     
 
 def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
@@ -325,7 +333,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         save_total_limit=20,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=1000,
+        eval_steps=10,
         optim="adamw_torch",
         bf16=True,          # enable bfloat16 (H100 optimized)
         fp16=False,         
@@ -366,7 +374,18 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     train_loader = DataLoader(
         train_dataset,
         batch_size=params.TRAIN_BATCH_SIZE,
-        num_workers=8,
+        num_workers=1,
+        persistent_workers=True,
+        pin_memory=True,
+        drop_last=False,
+        collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
+    )
+
+    eval_loader = DataLoader(
+        eval_dataset,
+        batch_size=params.TRAIN_BATCH_SIZE,
+        num_workers=1,
+        persistent_workers=True,
         pin_memory=True,
         drop_last=False,
         collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
@@ -378,8 +397,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100),
-        train_loader=train_loader
+        train_loader=train_loader,
+        eval_loader=eval_loader
     )
 
     callback = GenerateEvalCallback(
@@ -387,7 +406,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=1000,
+        eval_steps=10,
         eval_data_collator=lambda batch: no_processing_collator(batch),
     )
     trainer.add_callback(callback)
@@ -440,19 +459,18 @@ def main():
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-    check_idx = 3
-    print(eval_dataset[check_idx])
-    print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
-    print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
-
     gen_eval_dataset = train_thinking.ReasoningDataset("eval", "gen_eval", ["1m"])
 
-    it = iter(train_dataset)
-    sample = next(it)
-    print(sample.keys())  
-    print(sample)
-    print(tokenizer.decode([x for x in sample["labels"] if x != -100]))
-    print(gen_eval_dataset[0])
+    # check_idx = 3
+    # print(eval_dataset[check_idx])
+    # print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
+    # print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
+    # it = iter(train_dataset)
+    # sample = next(it)
+    # print(sample.keys())  
+    # print(sample)
+    # print(tokenizer.decode([x for x in sample["labels"] if x != -100]))
+    # print(gen_eval_dataset[0])
 
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 1000

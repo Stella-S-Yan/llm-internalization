@@ -513,14 +513,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     # callback = SaveBestModelCallback()
     # trainer.add_callback(callback)
 
-    callback = GenerateEvalCallback(
-        trainer=trainer,
-        eval_dataset=gen_eval_dataset,
-        tokenizer=tokenizer,
-        eval_fn=evaluate_sequence_recall,
-        eval_steps=1000
-    )
-    trainer.add_callback(callback)
+    # callback = GenerateEvalCallback(
+    #     trainer=trainer,
+    #     eval_dataset=gen_eval_dataset,
+    #     tokenizer=tokenizer,
+    #     eval_fn=evaluate_sequence_recall,
+    #     eval_steps=1000
+    # )
+    # trainer.add_callback(callback)
 
     # trainer.train()
     trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor/checkpoint-424000")
