@@ -24,9 +24,11 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers import TrainerCallback
 from torch.utils.data import Subset
-from transformers import DataCollatorForSeq2Seq
+from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
 import re
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SID_PATTERN = re.compile(r"<sid>(.*?)<")
@@ -50,6 +52,8 @@ class Params:
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ADAPTOR_SAVE_DIR = ''
+    ACC_STEP=1
+    RUN_NUM=0
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -87,7 +91,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=30,
+    max_new_tokens=64,
     top_k_list=[5],
     print_random_example=True,  # new flag
 ):
@@ -277,10 +281,11 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_{params.ADAPTOR_SAVE_DIR}",
+        output_dir=config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_{params.ADAPTOR_SAVE_DIR}_{params.RUN_NUM}",
         logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
-        gradient_accumulation_steps=1,
+        # per_device_eval_batch_size=32,
+        gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
         weight_decay=params.WEIGHT_DECAY,
@@ -298,6 +303,9 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         fp16=False,         # optional: if you want fp16 instead
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
+        dataloader_num_workers=2,
+        dataloader_persistent_workers=True,
+        dataloader_pin_memory=True,
     )
     
     
@@ -319,6 +327,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         task_type=TaskType.CAUSAL_LM
     )
 
+
+    # model = torch.compile(model, mode="max-autotune")
     peft_model = get_peft_model(model, lora_config)
 
     # Freeze all base model parameters (done automatically by get_peft_model)
@@ -332,8 +342,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        # data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer),  # use custom collator
-        data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100)
+        data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
     )
 
     callback = GenerateEvalCallback(
@@ -347,7 +356,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
     trainer.add_callback(callback)
 
     trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-5500")
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-37500")
 
 
 def main():
@@ -362,13 +371,15 @@ def main():
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='think_sft_adaptor', help="Where to save the trained adaptor")
+    parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
+    parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"Freq_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
     Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
@@ -382,17 +393,6 @@ def main():
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
 
-    train_dataset = train_thinking_serial.StreamingReasoningDataset(
-            split="train",
-            datatype="sft",
-            sources="1m",
-            block_size=8192)
-    
-    eval_dataset = train_thinking_serial.StreamingReasoningDataset(
-            split="train",
-            datatype="sft",
-            sources="1m",
-            block_size=1024)
     
     train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])

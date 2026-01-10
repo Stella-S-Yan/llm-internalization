@@ -24,6 +24,7 @@ from torch.optim.lr_scheduler import LambdaLR
 import os
 from utils import bagz_utils
 import json
+import orjson
 import torch.distributed as dist
 import bagz
 
@@ -102,6 +103,7 @@ class StreamingReasoningDataset(IterableDataset):
                 buffer[idx] = buffer[-1]
                 buffer.pop()
 
+
         # Drain remaining buffer
         while buffer:
             idx = torch.randint(
@@ -112,11 +114,13 @@ class StreamingReasoningDataset(IterableDataset):
             buffer.pop()
 
     def _process_item(self, record):
-        record = json.loads(record.decode("utf-8"))
+        record = orjson.loads(record.decode("utf-8"))
         if self.datatype == "sft":
             return {
-                "input_ids": record["input_ids"],
-                "labels": record["labels"],
+                # "input_ids": record["input_ids"],
+                # "labels": record["labels"],
+                "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
+                "labels": torch.tensor(record["labels"], dtype=torch.long)
             }
         elif self.datatype == "grpo":
             return {
@@ -163,8 +167,10 @@ class ReasoningDataset(Dataset):
         record = self.data[idx]
         if self.datatype == "sft":
             return {
-                "input_ids": record["input_ids"],
-                "labels": record["labels"]
+                # "input_ids": record["input_ids"],
+                # "labels": record["labels"],
+                "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
+                "labels": torch.tensor(record["labels"], dtype=torch.long)
             }
         elif self.datatype == "grpo":
             return {
@@ -209,9 +215,11 @@ def sft_data_collator(batch, tokenizer):
     Returns attention_mask automatically.
     """
     # Convert each input/label to a torch tensor
-    input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
-    labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
+    # input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
+    # labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
 
+    input_ids = [f["input_ids"] for f in batch]
+    labels = [f["labels"] for f in batch]
 
     # pad sequences to the max length in the batch
     input_ids = pad_sequence(
