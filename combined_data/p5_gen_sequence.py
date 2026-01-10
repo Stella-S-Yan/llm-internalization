@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 import config
 from utils import bagz_utils
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ def run_preprocessing():
         }
         records.append(record)
 
+    rng = random.Random(411)  # fixed seed
+    rng.shuffle(records)
     bagz_utils.save_record(records, config.USER_SEQUENCE)
 
 
