@@ -42,6 +42,15 @@ def save_record(records, target_file):
             writer.write(json.dumps(record).encode("utf-8"))  # convert string to bytes
 
 
+def write_batch(writer, records):
+    """
+    New function: Writes a batch of records to an active writer object.
+    Does NOT open/close the file.
+    """
+    for record in records:
+        writer.write(json.dumps(record).encode("utf-8"))
+        
+
 def read_record(bagz_file):
     """Read string records from a Bagz file."""
     reader = bagz.Reader(bagz_file)

@@ -45,8 +45,8 @@ torch.backends.cudnn.benchmark = False
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_all_sid_alignment"
-LOG_DIR = config.RUN_DIR / "Lepard_all_sid_alignment"
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_sid_alignment"
+LOG_DIR = config.RUN_DIR / "ML_sid_alignment"
 BATCH_SIZE = 128
 TOTAL_STEPS = 8_000     # plateau at step 2k
 LR =  6e-3         #  
@@ -57,7 +57,7 @@ WARMUP_UP = 400
 
 
 # Create an informative run name
-RUN_NAME = f"combined_scheduler{SCHEDULE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
+RUN_NAME = f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
 
 
 def load_model_tokenizer(run_test: False):
@@ -96,34 +96,18 @@ def load_model_tokenizer(run_test: False):
 
 
 class SIDDataset(Dataset):
-    def __init__(self, df, emb_type):
+    def __init__(self, df):
         
         check_idx = 111
-        self.emb_type = emb_type
         out_prefix = config.LEPARD_LLM_EMB
 
-        self.emb = np.load(f"{out_prefix}_{emb_type}_emb.npy", mmap_mode="r")
-        row_ids = np.load(f"{out_prefix}_{emb_type}_row_ids.npy", allow_pickle=True)
+        self.emb = np.load(f"{out_prefix}.npy", mmap_mode="r")
+        row_ids = np.load(f"{out_prefix}_row_ids.npy", allow_pickle=True)
 
-        if emb_type == "dest":
-            id_to_formatted = dict(zip(df["row_id"], df["dest_formatted_sid"]))
+        id_to_formatted = dict(zip(df["row_id"], df["sid"]))
 
-            # Reorder formatted_sid according to row_ids
-            self.sids = [id_to_formatted[rid] for rid in row_ids]
-        elif emb_type == "quote":
-            tmp = defaultdict(set)
-            for pid, sid in zip(df["passage_id"], df["quote_formatted_sid"]):
-                tmp[pid].add(sid)
-
-            conflicts = {k: v for k, v in tmp.items() if len(v) > 1}
-            assert not conflicts, f"Conflicting mappings found: {conflicts}"
-
-            id_to_formatted = {k: next(iter(v)) for k, v in tmp.items()}
-            self.sids = [id_to_formatted[rid] for rid in row_ids]
-
-            passage_id = row_ids[check_idx]
-            sid_value = df.loc[df["passage_id"] == passage_id, "quote_formatted_sid"].iloc[0]
-            assert sid_value == self.sids[check_idx], f"Mismatch at index {check_idx}: {sid_value} vs {self.sids[check_idx]}"
+        # Reorder formatted_sid according to row_ids
+        self.sids = [id_to_formatted[rid] for rid in row_ids]
 
 
     def __len__(self):
@@ -135,7 +119,6 @@ class SIDDataset(Dataset):
         return {
             "A_emb": torch.from_numpy(self.emb[idx]),
             "sid": self.sids[idx],
-            "type": self.emb_type
         }
 
 
@@ -305,13 +288,13 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
 
     # optimizer = torch.optim.Adam([emb.weight], lr=LR)
     optimizer = torch.optim.AdamW([emb.weight], lr=LR, weight_decay=1e-2, betas=(0.9, 0.98))
-    
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=WARMUP_UP,
         num_training_steps=TOTAL_STEPS,  # short warmup then flat
     )
     
+
     model.to(DEVICE)
     
     dataloader = DataLoader(
@@ -429,13 +412,10 @@ def main():
 
     df = pd.read_parquet(config.LEPARD_SID) # contain sid
 
-    dest_dataset = SIDDataset(df, emb_type="dest")
-    quote_dataset = SIDDataset(df, emb_type="quote")
-
-    combined_ds = ConcatDataset([dest_dataset, quote_dataset])
+    dataset = SIDDataset(df)
     
     # Train
-    train_sid_embeddings(model, combined_ds, tokenizer, old_vocab_size, writer)
+    train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer)
     
     
 if __name__ == "__main__":

@@ -1,35 +1,41 @@
 """
 Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
-
-Able to achieve 4.97% recall@5
+Use all types of reivews.
 
 
 
 DDP using all GPUs available.
 # Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_thinking_sft.py
+$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
+import random
 import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
-from transformers import TrainingArguments, Trainer
-import argparse
-import train_thinking
-import numpy as np
-import random
-import os
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from torch.utils.data import DataLoader, DistributedSampler
-from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from transformers import TrainerCallback
+import numpy as np
+import bagz
+from tqdm import tqdm
+from torch.utils.data import DataLoader, DistributedSampler
+import argparse
 from torch.utils.data import Subset
-from transformers import DataCollatorForSeq2Seq
+import os
+import random
+import pandas as pd
 import re
+from transformers import DataCollatorForSeq2Seq
+from combined_data import train_thinking
+from accelerate import Accelerator
+
+
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SID_PATTERN = re.compile(r"<sid>(.*?)<")
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor"
+SID_PATTERN = re.compile(r"<ssid>(.*?)</")
 
 # Set seeds for reproducibility
 seed = 411
@@ -49,7 +55,7 @@ class Params:
     LORA_RANK = 16      # 16 large rank overfit early
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
-    ADAPTOR_SAVE_DIR = ''
+    ACC_STEP = 1
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -61,6 +67,7 @@ def load_checkpoint(base_model_name, save_dir):
 
     # 2. Load extended tokenizer
     tokenizer = AutoTokenizer.from_pretrained(save_dir)
+    tokenizer.padding_side = "left"
 
     old_vocab_size = model.get_input_embeddings().weight.shape[0]
     new_vocab_size = len(tokenizer)
@@ -187,9 +194,9 @@ def no_processing_collator(batch):
 
 
 class GenerateEvalCallback(TrainerCallback):
-    def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps, eval_data_collator):
+    def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps, eval_data_collator):
         self.trainer = trainer
-        self.eval_datasets = eval_datasets
+        self.eval_dataset = eval_dataset
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
@@ -212,92 +219,122 @@ class GenerateEvalCallback(TrainerCallback):
             rank = torch.distributed.get_rank() if is_ddp else 0
             world_size = torch.distributed.get_world_size() if is_ddp else 1
 
-            for dataset_name, eval_dataset in self.eval_datasets.items():
 
-                # ---- Sampler (per dataset) ----
-                sampler = (
-                    DistributedSampler(eval_dataset, shuffle=False)
-                    if is_ddp
-                    else None
-                )
+            # ---- Sampler (per dataset) ----
+            sampler = (
+                DistributedSampler(self.eval_dataset, shuffle=False)
+                if is_ddp
+                else None
+            )
 
-                eval_loader = DataLoader(
-                    eval_dataset,
-                    batch_size=self.batch_size,
-                    sampler=sampler,
-                    shuffle=False,
-                    collate_fn=self.eval_data_collator,  # or your custom collate_fn
-                )
+            eval_loader = DataLoader(
+                self.eval_dataset,
+                batch_size=self.batch_size,
+                sampler=sampler,
+                shuffle=False,
+                collate_fn=None,
+            )
 
-                # tqdm only on rank 0
-                if rank == 0:
-                    eval_loader = tqdm(
-                        eval_loader,
-                        desc=f"Eval [{dataset_name}] @ step {state.global_step}",
-                    )
-
-                # ---- Custom generate-based eval ----
-                metrics = self.eval_fn(
-                    self.trainer.model,
-                    self.tokenizer,
+            # tqdm only on rank 0
+            if rank == 0:
+                eval_loader = tqdm(
                     eval_loader,
+                    desc=f"Eval @ step {state.global_step}",
                 )
 
-                # ---- DDP reduce (mean) ----
-                if is_ddp:
-                    for k, v in metrics.items():
-                        tensor = torch.tensor(v, device=self.trainer.model.device)
-                        torch.distributed.all_reduce(
-                            tensor, op=torch.distributed.ReduceOp.SUM
-                        )
-                        metrics[k] = (tensor / world_size).item()
+            # ---- Custom generate-based eval ----
+            metrics = self.eval_fn(
+                self.trainer.model,
+                self.tokenizer,
+                eval_loader,
+            )
 
-                # ---- Prefix metrics for TensorBoard ----
-                metrics = {
-                    f"eval/{dataset_name}/{k}": v
-                    for k, v in metrics.items()
-                }
-                metrics["step"] = state.global_step
-
-                # ---- Log ----
-                self.trainer.log(metrics)
-
-                if rank == 0:
-                    print(
-                        f"\n[Custom eval @ step {state.global_step}] "
-                        f"[{dataset_name}] {metrics}"
+            # ---- DDP reduce (mean) ----
+            if is_ddp:
+                for k, v in metrics.items():
+                    tensor = torch.tensor(v, device=self.trainer.model.device)
+                    torch.distributed.all_reduce(
+                        tensor, op=torch.distributed.ReduceOp.SUM
                     )
+                    metrics[k] = (tensor / world_size).item()
+
+            # ---- Prefix metrics for TensorBoard ----
+            metrics = {
+                f"eval/{k}": v
+                for k, v in metrics.items()
+            }
+            metrics["step"] = state.global_step
+
+            # ---- Log ----
+            self.trainer.log(metrics)
+
+            if rank == 0:
+                print(
+                    f"\n[Custom eval @ step {state.global_step}] "
+                    f"{metrics}"
+                )
 
         return control
 
 
-def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, params):
+class SaveBestModelCallback(TrainerCallback):
+    def __init__(self):
+        self.best = float('inf')
+        
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        eval_loss = metrics.get("eval_loss")
+        if eval_loss is not None and eval_loss < self.best:
+            self.best = eval_loss
+            control.should_save = True  # save checkpoint this step
+        else:
+            control.should_save = False  # skip checkpoint
+        return control
+
+
+class IterableTrainer(Trainer):
+    def __init__(self, train_loader=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._train_loader = train_loader  # store the pre-wrapped DataLoader
+
+    def get_train_dataloader(self):
+        # Return the pre-wrapped DataLoader
+        if self._train_loader is None:
+            # Fallback to default behavior if not passed
+            return super().get_train_dataloader()
+        return self._train_loader
+    
+
+def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_{params.ADAPTOR_SAVE_DIR}",
+        output_dir=MODEL_SAVE_DIR,
         logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",
-        logging_steps=500,
+        logging_steps=1000,
         save_strategy="steps",
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
+        save_steps=2000,
         save_total_limit=20,
+        load_best_model_at_end=False,
         eval_strategy="steps",
         eval_steps=1000,
         optim="adamw_torch",
-        bf16=True,          # <<< enable bfloat16 (H100 optimized)
-        fp16=False,         # optional: if you want fp16 instead
+        bf16=True,          # enable bfloat16 (H100 optimized)
+        fp16=False,         
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
+        dataloader_num_workers=8,
+        remove_unused_columns=False,  # REQUIRED for IterableDataset
+        dataloader_drop_last=False,
+        dataloader_pin_memory=True,
     )
     
     
@@ -325,20 +362,29 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
     for name, param in peft_model.named_parameters():
         if "lora_" not in name:
             param.requires_grad = False
-    
 
-    trainer = Trainer(
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=params.TRAIN_BATCH_SIZE,
+        num_workers=8,
+        pin_memory=True,
+        drop_last=False,
+        collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
+    )
+
+    # --- Trainer ---
+    trainer = IterableTrainer(
         model=peft_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        # data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer),  # use custom collator
-        data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100)
+        data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100),
+        train_loader=train_loader
     )
 
     callback = GenerateEvalCallback(
         trainer=trainer,
-        eval_datasets=gen_eval_datasets,
+        eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
         eval_steps=1000,
@@ -347,7 +393,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
     trainer.add_callback(callback)
 
     trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-5500")
+    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/ML_1m_think_sft_adaptor/checkpoint-424000")
 
 
 def main():
@@ -357,87 +403,68 @@ def main():
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
     parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
     parser.add_argument("--LORA_RANK", type=int, default=16, help="Rank of LoRA adaptor")
-    parser.add_argument("--LORA_RATIO", type=float, default=0.1, help="LoRA adapter ratio")
-    parser.add_argument("--TOTAL_STEPS", type=int, default=20000, help="Number of total training steps")
+    parser.add_argument("--LORA_RATIO", type=float, default=1, help="LoRA adapter ratio")
+    parser.add_argument("--TOTAL_STEPS", type=int, default=10000, help="Number of total training steps")
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
-    parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='think_sft_adaptor', help="Where to save the trained adaptor")
+    parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"Freq_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
+    run_name = f"ML_{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    Params.LOGGING_DIR =  config.RUN_DIR / "ML_train_seq_pred" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
     # Load model and tokenizer in local device
     base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
-    save_dir = MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+    # save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_sid_alignment"
     # Load model to cpu first and let torchrun handle the device placement
     model, tokenizer = load_checkpoint(base_model_name, save_dir) 
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
-
-    train_dataset = train_thinking_serial.StreamingReasoningDataset(
-            split="train",
-            datatype="sft",
-            sources="1m",
-            block_size=8192)
+    print(tokenizer.eos_token)
     
-    eval_dataset = train_thinking_serial.StreamingReasoningDataset(
-            split="train",
-            datatype="sft",
-            sources="1m",
-            block_size=1024)
-    
-    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
 
-    # train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
-    # eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Beauty"])
+    train_dataset = train_thinking.StreamingReasoningDataset(
+        split="train",
+        datatype="sft",
+        sources="1m",
+        block_size=1024
+    )
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
+    print(f"---Eval dataset size: {len(eval_dataset)}")
+
     check_idx = 3
     print(eval_dataset[check_idx])
     print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
     print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
 
-    # eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
-    # print(eval_dataset[0])
-    
-    gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Toys_and_Games"])
-    gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Sports_and_Outdoors"])
-    gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Beauty"])
-    
-    
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "gen_eval", ["1m"])
+
+    it = iter(train_dataset)
+    sample = next(it)
+    print(sample.keys())  
+    print(sample)
+    print(tokenizer.decode([x for x in sample["labels"] if x != -100]))
+    print(gen_eval_dataset[0])
+
     SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 6000
+    GEN_EVAL_SUBSET_SIZE = 1000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
-    print(f"---Eval dataset size: {len(eval_dataset)}")
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
 
-    indices = rng.sample(range(len(gen_eval_dataset_1)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
-    gen_eval_dataset_2 = Subset(gen_eval_dataset_2, indices)
-    gen_eval_dataset_3 = Subset(gen_eval_dataset_3, indices)
-
-    gen_eval_datasets = {
-        "toys": gen_eval_dataset_1,
-        "sports": gen_eval_dataset_2,
-        "beauty": gen_eval_dataset_3
-    }
-
-    print(f"---Gen Eval dataset size: {len(eval_dataset)}")
-
+    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
     
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, Params)
 
-    
 if __name__ == "__main__":
     main()
     if torch.distributed.is_initialized():

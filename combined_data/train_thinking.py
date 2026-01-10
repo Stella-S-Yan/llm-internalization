@@ -12,8 +12,9 @@ $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 
 import config
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, IterableDataset, get_worker_info
 from transformers import Trainer, TrainerCallback
+from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
@@ -22,7 +23,127 @@ import math
 from torch.optim.lr_scheduler import LambdaLR
 import os
 from utils import bagz_utils
+import json
+import torch.distributed as dist
+import bagz
 
+
+class StreamingReasoningDataset(IterableDataset):
+    def __init__(
+        self,
+        split,
+        datatype: str,
+        sources,
+        block_size=1024,
+        seed=42,
+    ):
+        self.file_path = os.path.join(
+            config.PROCESSED_DATA_DIR,
+            f"{config.DATA_SOURCE}_{sources}_think_data_{split}.bagz",
+        )
+        self.datatype = datatype
+        self.block_size = block_size
+        self.seed = seed
+        self.epoch = 0  # will be updated by Trainer    
+
+    # ---------------------------
+    # Epoch control (Trainer calls this automatically)
+    # ---------------------------
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
+
+    def __iter__(self):
+        # ---------- DDP info ----------
+        if dist.is_available() and dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        else:
+            rank = 0
+            world_size = 1
+
+        # ---------- DataLoader worker info ----------
+        worker_info = get_worker_info()
+        if worker_info is None:
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
+        # ---------- Global worker identity ----------
+        global_worker_id = rank * num_workers + worker_id
+        total_workers = world_size * num_workers
+
+        # ---------- Worker- & epoch-specific RNG ----------
+        rng = torch.Generator()
+        rng.manual_seed(
+            self.seed
+            + self.epoch * 10_000
+            + global_worker_id
+        )
+
+        reader = bagz.Reader(self.file_path)
+
+        buffer = []
+
+        for i, item in enumerate(reader):
+            # Global sharding (CRITICAL)
+            if i % total_workers != global_worker_id:
+                continue
+
+            processed = self._process_item(item)
+            buffer.append(processed)
+
+            if len(buffer) >= self.block_size:
+                idx = torch.randint(
+                    0, len(buffer), (1,), generator=rng
+                ).item()
+                yield buffer[idx]
+                buffer[idx] = buffer[-1]
+                buffer.pop()
+
+        # Drain remaining buffer
+        while buffer:
+            idx = torch.randint(
+                0, len(buffer), (1,), generator=rng
+            ).item()
+            yield buffer[idx]
+            buffer[idx] = buffer[-1]
+            buffer.pop()
+
+    def _process_item(self, record):
+        record = json.loads(record.decode("utf-8"))
+        if self.datatype == "sft":
+            return {
+                "input_ids": record["input_ids"],
+                "labels": record["labels"],
+            }
+        elif self.datatype == "grpo":
+            return {
+                "prompt": record["prompt"],
+                "solution": record["solution"],
+            }
+        elif self.datatype == "raw_text_vllm":
+            return {
+                "prompt": {
+                    "prompt": record["prompt"],
+                    "prompt_token_ids": record["prompt_token_ids"].tolist(),
+                },
+                "target": record["target"],
+                "solution": record["solution"],
+            }
+        elif self.datatype == "raw_text":
+            return {
+                "prompt_token_ids": record["prompt_token_ids"],
+                "target": record["target"],
+            }
+        elif self.datatype == "gen_eval":
+            return {
+                "gen_prompt": record["prompt"],
+                "gen_target": record["target"],
+            }
+        else:
+            raise ValueError(f"Invalid datatype: {self.datatype}")
 
 
 class ReasoningDataset(Dataset):
@@ -80,7 +201,6 @@ def gen_eval_collator(batch):
     """
     return batch
 
-
 def sft_data_collator(batch, tokenizer):
     """
     Pads variable-length input_ids and labels in a batch.
@@ -88,22 +208,25 @@ def sft_data_collator(batch, tokenizer):
     - labels padded with -100 (so prompts are ignored)
     Returns attention_mask automatically.
     """
-    input_ids = [f["input_ids"] for f in batch]
-    labels = [f["labels"] for f in batch]
+    # Convert each input/label to a torch tensor
+    input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
+    labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
+
 
     # pad sequences to the max length in the batch
-    input_ids = torch.nn.utils.rnn.pad_sequence(
-        input_ids, 
-        batch_first=True, 
-        padding_value=tokenizer.pad_token_id, 
+    input_ids = pad_sequence(
+        input_ids,
+        batch_first=True,
+        padding_value=tokenizer.pad_token_id,
         padding_side="left"
-        )  
-    labels = torch.nn.utils.rnn.pad_sequence(
+    )
+
+    labels = pad_sequence(
         labels, 
         batch_first=True, 
         padding_value=-100, 
-        padding_side="left")
-
+        padding_side="left"
+    )
 
     attention_mask = (input_ids != tokenizer.pad_token_id).long()
 
