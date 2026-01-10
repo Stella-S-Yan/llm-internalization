@@ -379,11 +379,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         pin_memory=True,
         drop_last=False,
         collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
-        # collate_fn=DataCollatorForSeq2Seq(
-        #     tokenizer=tokenizer,
-        #     padding=True,
-        #     label_pad_token_id=-100
-        # )   
     )
 
     eval_loader = DataLoader(
@@ -394,12 +389,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         pin_memory=True,
         drop_last=False,
         collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
-        # collate_fn=DataCollatorForSeq2Seq(
-        #     tokenizer=tokenizer,
-        #     padding=True,
-        #     label_pad_token_id=-100
-        # )
-        
     )
 
     # --- Trainer ---
@@ -408,20 +397,19 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        # data_collator=DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100), # Since using my own dataloader, no need for this
         train_loader=train_loader,
         eval_loader=eval_loader
     )
 
-    # callback = GenerateEvalCallback(
-    #     trainer=trainer,
-    #     eval_dataset=gen_eval_dataset,
-    #     tokenizer=tokenizer,
-    #     eval_fn=evaluate_sequence_recall,
-    #     eval_steps=10,
-    #     eval_data_collator=lambda batch: no_processing_collator(batch),
-    # )
-    # trainer.add_callback(callback)
+    callback = GenerateEvalCallback(
+        trainer=trainer,
+        eval_dataset=gen_eval_dataset,
+        tokenizer=tokenizer,
+        eval_fn=evaluate_sequence_recall,
+        eval_steps=10,
+        eval_data_collator=lambda batch: no_processing_collator(batch),
+    )
+    trainer.add_callback(callback)
 
     trainer.train()
     # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/ML_1m_think_sft_adaptor/checkpoint-424000")
