@@ -29,13 +29,13 @@ import re
 from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
 from combined_data import train_thinking
 from accelerate import Accelerator
+from functools import partial
 
 
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor"
-SID_PATTERN = re.compile(r"<ssid>(.*?)</")
+SID_PATTERN = re.compile(r"<sid>(.*?)</")
 
 # Set seeds for reproducibility
 seed = 411
@@ -56,6 +56,7 @@ class Params:
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ACC_STEP = 1
+    RUN_NUM = 0
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -94,7 +95,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=30,
+    max_new_tokens=64,
     top_k_list=[5],
     print_random_example=True,  # new flag
 ):
@@ -191,6 +192,13 @@ def no_processing_collator(batch):
         key: [example[key] for example in batch]
         for key in batch[0].keys()
     }
+
+
+class SetEpochCallback(TrainerCallback):
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        dataset = kwargs["train_dataloader"].dataset
+        if hasattr(dataset, "set_epoch"):
+            dataset.set_epoch(int(state.epoch))
 
 
 class GenerateEvalCallback(TrainerCallback):
@@ -316,6 +324,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
+    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
+
     # --- Training arguments ---
     training_args = TrainingArguments(
         output_dir=MODEL_SAVE_DIR,
@@ -330,16 +340,16 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         logging_steps=1000,
         save_strategy="steps",
         save_steps=2000,
-        save_total_limit=20,
+        save_total_limit=1,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=10,
+        eval_steps=1000,
         optim="adamw_torch",
         bf16=True,          # enable bfloat16 (H100 optimized)
         fp16=False,         
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=8,
+        dataloader_num_workers=4,
         remove_unused_columns=False,  # REQUIRED for IterableDataset
         dataloader_drop_last=False,
         dataloader_pin_memory=True,
@@ -371,24 +381,27 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         if "lora_" not in name:
             param.requires_grad = False
 
+    collator_fn = partial(train_thinking.sft_data_collator, tokenizer=tokenizer)
+
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=params.TRAIN_BATCH_SIZE,
-        num_workers=1,
+        num_workers=4,
         persistent_workers=True,
         pin_memory=True,
         drop_last=False,
-        collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
+        collate_fn=collator_fn
     )
 
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=params.TRAIN_BATCH_SIZE,
-        num_workers=1,
+        num_workers=4,
         persistent_workers=True,
         pin_memory=True,
         drop_last=False,
-        collate_fn=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
+        collate_fn=collator_fn
     )
 
     # --- Trainer ---
@@ -406,10 +419,12 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=10,
+        eval_steps=1000,
         eval_data_collator=lambda batch: no_processing_collator(batch),
     )
     trainer.add_callback(callback)
+
+    trainer.add_callback(SetEpochCallback())
 
     trainer.train()
     # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/ML_1m_think_sft_adaptor/checkpoint-424000")
@@ -427,6 +442,7 @@ def main():
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
+    parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
 
     args = parser.parse_args()
 
@@ -434,7 +450,7 @@ def main():
         setattr(Params, key, value)
 
     run_name = f"ML_{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "ML_train_seq_pred" / run_name
+    Params.LOGGING_DIR =  config.RUN_DIR / "ML_train_think_pred" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
@@ -461,16 +477,16 @@ def main():
 
     gen_eval_dataset = train_thinking.ReasoningDataset("eval", "gen_eval", ["1m"])
 
-    # check_idx = 3
-    # print(eval_dataset[check_idx])
-    # print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
-    # print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
-    # it = iter(train_dataset)
-    # sample = next(it)
-    # print(sample.keys())  
-    # print(sample)
-    # print(tokenizer.decode([x for x in sample["labels"] if x != -100]))
-    # print(gen_eval_dataset[0])
+    check_idx = 3
+    print(eval_dataset[check_idx])
+    print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
+    print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
+    it = iter(train_dataset)
+    sample = next(it)
+    print(sample.keys())  
+    print(sample)
+    print(tokenizer.decode([x for x in sample["labels"] if x != -100]))
+    print(gen_eval_dataset[0])
 
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 1000
