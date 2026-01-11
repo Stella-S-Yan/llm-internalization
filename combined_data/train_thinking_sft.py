@@ -26,6 +26,7 @@ from transformers import TrainerCallback
 from torch.utils.data import Subset
 from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
 import re
+from functools import partial
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -284,7 +285,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         output_dir=config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_{params.ADAPTOR_SAVE_DIR}_{params.RUN_NUM}",
         logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
-        # per_device_eval_batch_size=32,
+        per_device_eval_batch_size=16,
         gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
@@ -295,7 +296,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         save_strategy="steps",
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        save_total_limit=20,
+        save_total_limit=1,
         eval_strategy="steps",
         eval_steps=1000,
         optim="adamw_torch",
@@ -303,7 +304,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         fp16=False,         # optional: if you want fp16 instead
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=2,
+        dataloader_num_workers=64,
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True,
     )
@@ -336,13 +337,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         if "lora_" not in name:
             param.requires_grad = False
     
+    collator_fn = partial(train_thinking.sft_data_collator, tokenizer=tokenizer)
 
     trainer = Trainer(
         model=peft_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=lambda batch: train_thinking.sft_data_collator(batch, tokenizer)
+        data_collator=collator_fn
     )
 
     callback = GenerateEvalCallback(

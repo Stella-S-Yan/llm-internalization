@@ -1,24 +1,82 @@
 #!/bin/bash
 set +e
 
-export CUDA_VISIBLE_DEVICES=7
+# Check if GPU index is provided
+if [ -z "$1" ]; then
+    echo "Usage: $0 <gpu_index>"
+    exit 1
+fi
 
-# One GPU, 64 OOM
-runs=(
-    # "--LR 1e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 8 --ACC_STEP 1 --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 0"  
-    # "--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 1"
-    # "--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 2 --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 2"  
-    # "--LR 8e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 4 --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 3"  
-    
-    # "--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 --LORA_RANK 16 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 4"  
-    # # "--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 2 --LORA_RANK 32 --LORA_RATIO 4 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 5"  
-    # "--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 --LORA_RANK 8 --LORA_RATIO 2 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 6"
-    "--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000  --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 --LORA_RANK 8 --LORA_RATIO 1 --LORA_DROPOUT 0.25 --TOTAL_STEPS 100000 --RUN_NUM 7"  
-)
+GPU_INDEX=$1
+export CUDA_VISIBLE_DEVICES=$GPU_INDEX
 
+# Select parameters based on GPU index
+case $GPU_INDEX in
+  0)
+    params="--LR 1e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 8 --ACC_STEP 1 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 0"
+    ;;
+  1)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 1"
+    ;;
+  2)
+    params="--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 2 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 2"
+    ;;
+  3)
+    params="--LR 8e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 4 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 3"
+    ;;
+  4)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
+            --LORA_RANK 16 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 4"
+    ;;
+  5)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
+            --LORA_RANK 8 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 6"
+    ;;
+  6)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
+            --LORA_RANK 8 --LORA_RATIO 1 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 7"
+    ;;
+  7)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
+            --LORA_RANK 8 --LORA_RATIO 1 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 100000 --RUN_NUM 7"
+    ;;
+  *)
+    echo "Unsupported GPU index: $GPU_INDEX"
+    exit 1
+    ;;
+esac
 
-for params in "${runs[@]}"; do
-  echo "Starting run with: $params"
-  torchrun --nproc_per_node=1 --rdzv_endpoint=localhost:29507 train_thinking_sft.py $params
-  echo "Finished run with: $params"
-done
+# Unique rendezvous port per GPU
+RDZV_PORT="2950${GPU_INDEX}"
+
+echo "Starting run on GPU $GPU_INDEX"
+echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+echo "RDZV_PORT=$RDZV_PORT"
+echo "Params: $params"
+
+torchrun \
+  --nproc_per_node=1 \
+  --rdzv_endpoint=localhost:$RDZV_PORT \
+  train_thinking_sft.py $params
+
+echo "Finished run on GPU $GPU_INDEX"
