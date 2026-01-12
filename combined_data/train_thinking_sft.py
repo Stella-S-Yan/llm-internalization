@@ -290,19 +290,19 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",
-        logging_steps=500,
+        logging_steps=2000,
         save_strategy="steps",
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        save_total_limit=1,
+        save_total_limit=10,
         eval_strategy="steps",
-        eval_steps=1000,
+        eval_steps=2000,
         optim="adamw_torch",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
         fp16=False,         # optional: if you want fp16 instead
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=64,
+        dataloader_num_workers=200,
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True
     )
@@ -382,7 +382,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_acc{Params.ACC_STEP}"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_acc{Params.ACC_STEP}_{Params.RUN_NUM}"
     Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")

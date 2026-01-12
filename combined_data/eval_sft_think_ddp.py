@@ -212,7 +212,7 @@ def main(run_num):
         tokenizer=tokenizer,
         eval_loader=eval_loader,
         num_beams=20,
-        max_new_tokens=30,
+        max_new_tokens=64,
         top_k_list=[1, 5, 10],
     )
 
