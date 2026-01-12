@@ -15,9 +15,9 @@ import argparse
 base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
 embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
 
-def main(checkpoint_step):
+def main(checkpoint_step, run_num):
 
-    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_think_sft_adaptor" / f"checkpoint-{checkpoint_step}"
+    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_think_sft_adaptor_{run_num}" / f"checkpoint-{checkpoint_step}"
 
     # Load BASE MODEL again — quantized or FP16 as desired
     model = AutoModelForCausalLM.from_pretrained(
@@ -65,7 +65,7 @@ def main(checkpoint_step):
     # ------------------------------------
     print(f"Restored think SFT model with extended vocabulary")
 
-    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_merged_think_sft_model"
+    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_merged_think_sft_model_{run_num}"
     merged_model.save_pretrained(save_dir)
     tokenizer.save_pretrained(save_dir)
 
@@ -75,11 +75,12 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Example script with parameters")
 
     # 2. Add arguments
-    parser.add_argument("--checkpoint_step", type=int, required=True, help="Step of checkpoining")
+    parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
+    parser.add_argument("--CHECK_POINT", type=int, default=0, help="Checkpoint number")
 
     # 3. Parse arguments
     args = parser.parse_args()
 
     # 4. Use arguments
 
-    main(args.checkpoint_step)
+    main(args.CHECK_POINT, args.RUN_NUM)

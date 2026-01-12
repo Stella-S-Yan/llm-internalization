@@ -1,8 +1,5 @@
 """
-Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
-
-Able to achieve 4.97% recall@5
-
+2_618_971 total training data
 
 
 DDP using all GPUs available.
@@ -55,6 +52,7 @@ class Params:
     ADAPTOR_SAVE_DIR = ''
     ACC_STEP=1
     RUN_NUM=0
+    CHECK_POINT=0
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -306,7 +304,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         ddp_find_unused_parameters=False,
         dataloader_num_workers=64,
         dataloader_persistent_workers=True,
-        dataloader_pin_memory=True,
+        dataloader_pin_memory=True
     )
     
     
@@ -328,7 +326,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         task_type=TaskType.CAUSAL_LM
     )
 
-
     # model = torch.compile(model, mode="max-autotune")
     peft_model = get_peft_model(model, lora_config)
 
@@ -347,18 +344,21 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         data_collator=collator_fn
     )
 
-    callback = GenerateEvalCallback(
-        trainer=trainer,
-        eval_datasets=gen_eval_datasets,
-        tokenizer=tokenizer,
-        eval_fn=evaluate_sequence_recall,
-        eval_steps=1000,
-        eval_data_collator=lambda batch: no_processing_collator(batch),
-    )
-    trainer.add_callback(callback)
+    # callback = GenerateEvalCallback(
+    #     trainer=trainer,
+    #     eval_datasets=gen_eval_datasets,
+    #     tokenizer=tokenizer,
+    #     eval_fn=evaluate_sequence_recall,
+    #     eval_steps=1000,
+    #     eval_data_collator=lambda batch: no_processing_collator(batch),
+    # )
+    # trainer.add_callback(callback)
 
-    trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor/checkpoint-37500")
+    if params.CHECK_POINT == 0:
+        trainer.train()
+    else:
+        print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
+        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
 
 
 def main():
@@ -375,13 +375,14 @@ def main():
     parser.add_argument("--ADAPTOR_SAVE_DIR", type=str, default='think_sft_adaptor', help="Where to save the trained adaptor")
     parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
     parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
+    parser.add_argument("--CHECK_POINT", type=int, default=0, help="Checkpoint number")
 
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_acc{Params.ACC_STEP}"
     Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")

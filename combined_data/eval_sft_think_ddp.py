@@ -32,6 +32,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
 import random
 import os
+import argparse
 
 SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
@@ -158,12 +159,12 @@ def collate_fn(batch):
 
     
 
-def main():
+def main(run_num):
 
     local_rank, device = ddp_init()
     
     # --- assign devices via vLLM ---
-    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_merged_think_sft_model"
+    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_merged_think_sft_model_{run_num}"
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
@@ -240,4 +241,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 1. Create parser
+    parser = argparse.ArgumentParser(description="Example script with parameters")
+
+    # 2. Add arguments
+    parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
+
+    # 3. Parse arguments
+    args = parser.parse_args()
+
+    main(args.RUN_NUM)
