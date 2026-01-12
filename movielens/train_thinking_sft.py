@@ -57,6 +57,7 @@ class Params:
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ACC_STEP = 1
     RUN_NUM = 0
+    CHECK_POINT = 0
 
 
 def load_checkpoint(base_model_name, save_dir):
@@ -426,8 +427,11 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
 
     trainer.add_callback(SetEpochCallback())
 
-    trainer.train()
-    # trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/ML_1m_think_sft_adaptor/checkpoint-424000")
+    if params.CHECK_POINT == 0:
+        trainer.train()
+    else:
+        print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
+        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/MovieLens_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
 
 
 def main():
@@ -443,6 +447,8 @@ def main():
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
     parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
+    parser.add_argument("--CHECK_POINT", type=int, default=0, help="Checkpoint number")
+
 
     args = parser.parse_args()
 
