@@ -30,7 +30,7 @@ from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
 from combined_data import train_thinking
 from accelerate import Accelerator
 from functools import partial
-
+import sample_sequence_data
 
 
 
@@ -195,12 +195,12 @@ def no_processing_collator(batch):
     }
 
 
-class SetEpochCallback(TrainerCallback):
+class EpochSeedCallback(TrainerCallback):
     def on_epoch_begin(self, args, state, control, **kwargs):
-        dataset = kwargs["train_dataloader"].dataset
-        if hasattr(dataset, "set_epoch"):
-            dataset.set_epoch(int(state.epoch))
-
+        train_dataset = kwargs["train_dataloader"].dataset
+        if hasattr(train_dataset, "set_epoch"):
+            train_dataset.set_epoch(state.epoch)
+            
 
 class GenerateEvalCallback(TrainerCallback):
     def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps, eval_data_collator):
@@ -326,6 +326,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(vars(Params))
 
     MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
+    NUM_WORKERS = 1
 
     # --- Training arguments ---
     training_args = TrainingArguments(
@@ -350,7 +351,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         fp16=False,         
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=4,
+        dataloader_num_workers=NUM_WORKERS,
         remove_unused_columns=False,  # REQUIRED for IterableDataset
         dataloader_drop_last=False,
         dataloader_pin_memory=True,
@@ -382,37 +383,15 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         if "lora_" not in name:
             param.requires_grad = False
 
-    collator_fn = partial(train_thinking.sft_data_collator, tokenizer=tokenizer)
-
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=params.TRAIN_BATCH_SIZE,
-        num_workers=4,
-        persistent_workers=True,
-        pin_memory=True,
-        drop_last=False,
-        collate_fn=collator_fn
-    )
-
-    eval_loader = DataLoader(
-        eval_dataset,
-        batch_size=params.TRAIN_BATCH_SIZE,
-        num_workers=4,
-        persistent_workers=True,
-        pin_memory=True,
-        drop_last=False,
-        collate_fn=collator_fn
-    )
+    collator_fn = partial(sample_sequence_data.sample_seq_collator, tokenizer=tokenizer)
 
     # --- Trainer ---
-    trainer = IterableTrainer(
+    trainer = Trainer(
         model=peft_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        train_loader=train_loader,
-        eval_loader=eval_loader
+        data_collator=collator_fn
     )
 
     callback = GenerateEvalCallback(
@@ -425,7 +404,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     )
     trainer.add_callback(callback)
 
-    trainer.add_callback(SetEpochCallback())
+    trainer.add_callback(EpochSeedCallback())
 
     if params.CHECK_POINT == 0:
         trainer.train()
@@ -471,36 +450,22 @@ def main():
     old_vocab_size = 128_256
     print(tokenizer.eos_token)
     
+    train_dataset = sample_sequence_data.SampleSeqDataset()
 
-    train_dataset = train_thinking.StreamingReasoningDataset(
-        split="train",
-        datatype="sft",
-        sources="1m",
-        block_size=1024
-    )
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
-    print(f"---Eval dataset size: {len(eval_dataset)}")
-
     gen_eval_dataset = train_thinking.ReasoningDataset("eval", "gen_eval", ["1m"])
 
     check_idx = 3
     print(eval_dataset[check_idx])
     print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
+    print("----------------------")
     print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
     it = iter(train_dataset)
     sample = next(it)
+    print("----------------------")
     print(sample.keys())  
     print(sample)
-    print(tokenizer.decode([x for x in sample["labels"] if x != -100]))
     print(gen_eval_dataset[0])
-
-    SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 1000
-    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    eval_dataset = Subset(eval_dataset, indices)
-    gen_eval_dataset = Subset(gen_eval_dataset, indices)
 
     train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
     
