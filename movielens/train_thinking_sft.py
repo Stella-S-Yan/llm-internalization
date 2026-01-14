@@ -9,6 +9,9 @@ DDP using all GPUs available.
 $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
+
 import random
 import config
 import torch
@@ -22,20 +25,13 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 from torch.utils.data import Subset
-import os
 import random
-import pandas as pd
 import re
-from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
 from combined_data import train_thinking
-from accelerate import Accelerator
 from functools import partial
 import sample_sequence_data
 
 
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SID_PATTERN = re.compile(r"<sid>(.*?)</")
 
 # Set seeds for reproducibility
 seed = 411
@@ -206,7 +202,6 @@ def no_processing_collator(batch):
     }
 
 
-
 class EpochSeedCallback(TrainerCallback):
     def on_epoch_begin(self, args, state, control, **kwargs):
         train_dataset = kwargs["train_dataloader"].dataset
@@ -224,8 +219,8 @@ class GenerateEvalCallback(TrainerCallback):
         self.batch_size = 16
         self.best_metric = None  # Track best metric
 
-    def on_step_end(self, args, state, control, **kwargs):
-    # def on_evaluate(self, args, state, control, **kwargs):
+    # def on_step_end(self, args, state, control, **kwargs):
+    def on_evaluate(self, args, state, control, **kwargs):
         eval_interval = self.eval_steps
 
         # Run every eval_steps
@@ -249,6 +244,7 @@ class GenerateEvalCallback(TrainerCallback):
             eval_loader = DataLoader(
                 self.eval_dataset,
                 batch_size=self.batch_size,
+                num_workers=4,
                 sampler=sampler,
                 shuffle=False,
                 collate_fn=no_processing_collator,
@@ -306,41 +302,6 @@ class GenerateEvalCallback(TrainerCallback):
                 )
 
             return control
-
-
-class SaveBestModelCallback(TrainerCallback):
-    def __init__(self):
-        self.best = float('inf')
-        
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        eval_loss = metrics.get("eval_loss")
-        if eval_loss is not None and eval_loss < self.best:
-            self.best = eval_loss
-            control.should_save = True  # save checkpoint this step
-        else:
-            control.should_save = False  # skip checkpoint
-        return control
-
-
-class IterableTrainer(Trainer):
-    def __init__(self, train_loader=None, eval_loader=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._train_loader = train_loader  # store the pre-wrapped DataLoader
-        self._eval_loader = eval_loader
-
-    def get_train_dataloader(self):
-        # Return the pre-wrapped DataLoader
-        if self._train_loader is None:
-            # Fallback to default behavior if not passed
-            return super().get_train_dataloader()
-        return self._train_loader
-
-    def get_eval_dataloader(self, eval_dataset=None):
-        # use your custom eval loader if provided
-        if self._eval_loader is not None:
-            return self._eval_loader
-        # fallback to default behavior, passing eval_dataset
-        return super().get_eval_dataloader(eval_dataset)
     
 
 def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
@@ -361,14 +322,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",
-        logging_steps=1000,
+        logging_steps=2000,
         save_strategy="steps",
         save_steps=2000,
         save_total_limit=1,
         load_best_model_at_end=False,
         eval_strategy="steps",
         # eval_strategy="no",
-        eval_steps=10,
+        eval_steps=2000,
         optim="adamw_torch",
         bf16=True,          # enable bfloat16 (H100 optimized)
         fp16=False,         
@@ -376,7 +337,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         ddp_find_unused_parameters=False,
         dataloader_num_workers=NUM_WORKERS,
         remove_unused_columns=False,  # REQUIRED for IterableDataset
-        dataloader_drop_last=False,
         dataloader_pin_memory=True,
     )
     
@@ -422,7 +382,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=10,
+        eval_steps=2000,
     )
     trainer.add_callback(callback)
 

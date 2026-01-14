@@ -78,7 +78,8 @@ def evaluate_sequence_recall(
 
     printed = False
 
-    for batch in tqdm(eval_loader, desc="Evaluating"):
+    # for batch in tqdm(eval_loader, desc="Evaluating"):
+    for batch in eval_loader:
         prompts = batch["prompt"]
         solutions = batch["solution"]
 
