@@ -34,7 +34,6 @@ import random
 import os
 import argparse
 
-SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
 def ddp_init():
     if "RANK" in os.environ:
@@ -54,22 +53,19 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=8,
-    top_k_list=[1, 5, 10],
+    max_new_tokens=128,
+    top_k_list=(1, 5, 10),
     print_random_example=True,
 ):
     """
-    Batched sequence-level recall evaluation using beam search.
     Returns:
         local_hits: dict {k: hit_count}
-        local_total: int total number of examples processed by this rank
+        local_total: int
     """
     model.eval()
     model = model.module if hasattr(model, "module") else model
-    # Pick device from the model's first parameter
     device = next(model.parameters()).device
-    
-    # We now store only raw hits, not full lists
+
     local_hits = {k: 0 for k in top_k_list}
     local_total = 0
 
@@ -82,7 +78,6 @@ def evaluate_sequence_recall(
         prompts = batch["prompt"]
         solutions = batch["solution"]
 
-        # Tokenize → move to GPU
         inputs = tokenizer(
             prompts,
             return_tensors="pt",
@@ -90,62 +85,71 @@ def evaluate_sequence_recall(
             truncation=True,
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        
 
         batch_size = len(prompts)
-        prompt_len = inputs["input_ids"].size(1)
 
-        # Beam search
-        # outputs = model.module.generate(
-        outputs = model.generate(
+        # ---- Correct prompt lengths (padding-safe) ----
+        prompt_lens = inputs["attention_mask"].sum(dim=1)
+
+        # ---- Generate with scores ----
+        gen_out = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             num_beams=max(num_beams, num_return_sequences),
             num_return_sequences=num_return_sequences,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
         )
 
-        # (batch, num_return_sequences, seq_len)
-        outputs = outputs.view(batch_size, num_return_sequences, -1)
+        sequences = gen_out.sequences
+        scores = gen_out.sequences_scores
 
-        # Loop over batch
+        # (batch, beams, seq_len)
+        sequences = sequences.view(batch_size, num_return_sequences, -1)
+        scores = scores.view(batch_size, num_return_sequences)
+
         for i in range(batch_size):
+            # ---- Sort beams by descending score ----
+            order = torch.argsort(scores[i], descending=True)
+            sorted_seqs = sequences[i][order]
+
+            sid = solutions[i]["sid"]
+
+            # ---- Decode once ----
             generations = [
                 tokenizer.decode(
-                    outputs[i, k, prompt_len:],
-                    skip_special_tokens=True
+                    sorted_seqs[j, prompt_lens[i]:],
+                    skip_special_tokens=True,
                 )
-                for k in range(num_return_sequences)
+                for j in range(num_return_sequences)
             ]
 
-            # Extract <sid> from generated outputs
-            # pred_sids = [
-            #     (m.group(1).strip() if (m := SID_PATTERN.search(t)) else None)
-            #     for t in generations
-            # ]
-
-            # All levels
-            hits = [solutions[i]["sid"] in g for g in generations]
-
+            # ---- Recall@k with short-circuit ----
             for k in top_k_list:
-                # if any of the first k generations hits
-                local_hits[k] += int(any(hits[:k]))
+                hit = False
+                for j in range(k):
+                    if sid in generations[j]:
+                        hit = True
+                        break
+                local_hits[k] += int(hit)
 
-        # Print only once
+        # ---- Print one example ----
         if print_random_example and not printed:
             idx = random.randint(0, batch_size - 1)
             print("\n=== Random Example ===")
             print(f"Prompt:\n{prompts[idx]}")
             print(f"Solution:\n{solutions[idx]}")
-            for k in range(min(5, num_return_sequences)):
-                print(f"[Gen {k+1}] {generations[k]}")
+            for j in range(min(5, num_return_sequences)):
+                print(f"[Gen {j+1}] {generations[j]}")
             print("========================\n")
             printed = True
 
         local_total += batch_size
 
     return local_hits, local_total
+
 
 def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
@@ -157,7 +161,6 @@ def collate_fn(batch):
         "solution": [x["solution"] for x in batch]
     }
 
-    
 
 def main(run_num):
 
@@ -194,18 +197,13 @@ def main(run_num):
         rank = 0
         sampler = None
 
-
-    batch_size = 64   # 64 may be too large for beam search
-
-
     eval_loader = DataLoader(
         gen_eval_dataset,
-        batch_size=batch_size,
+        batch_size=32,
         sampler=sampler,
         shuffle=False,
         collate_fn=collate_fn
     )
-
 
     local_hits, local_total = evaluate_sequence_recall(
         model=model,
@@ -237,7 +235,6 @@ def main(run_num):
             for i, k in enumerate([1,5,10])
         }
         print(global_recalls)
-
 
 
 if __name__ == "__main__":

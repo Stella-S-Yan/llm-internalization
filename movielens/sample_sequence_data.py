@@ -45,8 +45,8 @@ class SampleSeqDataset(Dataset):
     def __len__(self):
         return len(self.data)  # 6000
 
-    def set_epoch(self, epoch):
-        random.seed(411 + epoch)
+    # def set_epoch(self, epoch):
+        # random.seed(411 + epoch)
 
     def __getitem__(self, idx):
         record = self.data[idx]
@@ -80,7 +80,7 @@ class SampleSeqDataset(Dataset):
         ).strip()
 
         solution = {
-            "freq": freq_A,
+            "freq": freq_A if freq_A else 'None',
             "year": target_year,
             "genre": target_genre,
             "sid": target_sid,

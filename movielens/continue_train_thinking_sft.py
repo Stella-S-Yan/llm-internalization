@@ -9,6 +9,9 @@ DDP using all GPUs available.
 $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import random
 import config
 import torch
@@ -118,15 +121,14 @@ def evaluate_sequence_recall(
     model.eval()
     device = model.device
 
-    local_hits = {k: 0 for k in top_k_list}
-    local_total = 0
+    # Initialize recall lists
+    recalls_dict = {k: [] for k in top_k_list}
     printed = False  # track if we've printed already
-    max_k = max(top_k_list)
 
     # Process dataset in batches
     for batch in tqdm(eval_loader, desc="Evaluating"):
-        prompts = batch["prompt"]
-        solutions = batch["solution"]
+        prompts = batch["gen_prompt"]
+        targets = batch["gen_target"]
 
         # Tokenize batch
         inputs = tokenizer(
@@ -137,74 +139,63 @@ def evaluate_sequence_recall(
         ).to(device)
 
         batch_size = len(prompts)
-        
-        prompt_lens = inputs["attention_mask"].sum(dim=1)
+        max_k = max(top_k_list)
 
+        
         # Generate sequences for the batch
-        gen_out = model.generate(
+        outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, max_k),
-            num_return_sequences=max_k,
+            num_beams=max(num_beams, max(top_k_list)),
+            num_return_sequences=max(top_k_list),
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
-            return_dict_in_generate=True,
-            output_scores=True,
         )
 
-        sequences = gen_out.sequences
-        scores = gen_out.sequences_scores
-
-        # (batch, beams, seq_len)
-        sequences = sequences.view(batch_size, max_k, -1)
-        scores = scores.view(batch_size, max_k)
+        # Reshape outputs: (batch_size, num_return_sequences, seq_len)
+        batch_outputs = outputs.view(batch_size, max(top_k_list), -1)
 
         # Decode and compute top-k recall
         for i in range(batch_size):
-            # ---- Sort beams by descending score ----
-            order = torch.argsort(scores[i], descending=True)
-            sorted_seqs = sequences[i][order]
-
-            sid = solutions[i]['sid']
-            generations = [
-                tokenizer.decode(
-                    sorted_seqs[j, prompt_lens[i]:],
-                    skip_special_tokens=True,
-                )
-                for j in range(max_k)
+            prompt_len = inputs["input_ids"].size(1)
+            decoded_outputs = [
+                tokenizer.decode(batch_outputs[i, k, prompt_len:], skip_special_tokens=True)
+                for k in range(max_k)
             ]
+            # print(decoded_outputs)
+            match = SID_PATTERN.search(targets[i])
+            if match:
+                sid_value = match.group(1)
+            else:
+                sid_value = "NONE"
 
-            # ---- Recall@k with short-circuit ----
+            hits = [1 if sid_value in o else 0 for o in decoded_outputs]
             for k in top_k_list:
-                hit = False
-                for j in range(k):
-                    if sid in generations[j]:
-                        hit = True
-                        break
-                local_hits[k] += int(hit)
+                recalls_dict[k].append(int(any(hits[:k])))
 
-        # ---- Print one example ----
+
+        # ---- Print one random batch example ----
         if print_random_example and not printed:
-            idx = random.randint(0, batch_size - 1)
+            rand_idx = random.randint(0, batch_size - 1)
             print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[idx]}")
-            print(f"Solution:\n{solutions[idx]}")
-            for j in range(min(3, max_k)):
-                print(f"[Gen {j+1}] {generations[j]}")
+            print(f"Prompt:\n{prompts[rand_idx]}")
+            print(f"Target:\n{targets[rand_idx]}")
+            for k, gen in enumerate(decoded_outputs[:5]):  # show top 5 generations
+                print(f"[Gen {k+1}] {gen}")
             print("========================\n")
             printed = True
+        # ----------------------------------------
 
-        local_total += batch_size
-
-    return local_hits, local_total
+    # Compute mean recall
+    recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
+    return recalls_mean
 
 
 def no_processing_collator(batch):
     return {
-        "prompt": [x["prompt"] for x in batch],
-        "solution": [x["solution"] for x in batch]
+        key: [example[key] for example in batch]
+        for key in batch[0].keys()
     }
-
 
 
 class EpochSeedCallback(TrainerCallback):
@@ -215,17 +206,18 @@ class EpochSeedCallback(TrainerCallback):
             
 
 class GenerateEvalCallback(TrainerCallback):
-    def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps):
+    def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps, eval_data_collator):
         self.trainer = trainer
         self.eval_dataset = eval_dataset
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
-        self.batch_size = 16
+        self.batch_size = 8
         self.best_metric = None  # Track best metric
+        self.eval_data_collator = eval_data_collator
 
-    def on_step_end(self, args, state, control, **kwargs):
-    # def on_evaluate(self, args, state, control, **kwargs):
+    # def on_step_end(self, args, state, control, **kwargs):
+    def on_evaluate(self, args, state, control, **kwargs):
         eval_interval = self.eval_steps
 
         # Run every eval_steps
@@ -239,6 +231,7 @@ class GenerateEvalCallback(TrainerCallback):
             rank = torch.distributed.get_rank() if is_ddp else 0
             world_size = torch.distributed.get_world_size() if is_ddp else 1
 
+
             # ---- Sampler (per dataset) ----
             sampler = (
                 DistributedSampler(self.eval_dataset, shuffle=False)
@@ -251,7 +244,7 @@ class GenerateEvalCallback(TrainerCallback):
                 batch_size=self.batch_size,
                 sampler=sampler,
                 shuffle=False,
-                collate_fn=no_processing_collator,
+                collate_fn=None,
             )
 
             # tqdm only on rank 0
@@ -262,50 +255,38 @@ class GenerateEvalCallback(TrainerCallback):
                 )
 
             # ---- Custom generate-based eval ----
-            local_hits, local_total = self.eval_fn(
+            metrics = self.eval_fn(
                 self.trainer.model,
                 self.tokenizer,
                 eval_loader,
             )
-            device = self.trainer.model.device
 
-            # ---- Prepare tensors ----
-            ks = sorted(local_hits.keys())  # ensure stable order
-            hits_tensor = torch.tensor(
-                [local_hits[k] for k in ks],
-                device=device,
-                dtype=torch.long,
-            )
-            total_tensor = torch.tensor(
-                [local_total],
-                device=device,
-                dtype=torch.long,
-            )
-
-            # ---- DDP reduce (SUM ONLY) ----
+            # ---- DDP reduce (mean) ----
             if is_ddp:
-                torch.distributed.all_reduce(hits_tensor, op=torch.distributed.ReduceOp.SUM)
-                torch.distributed.all_reduce(total_tensor, op=torch.distributed.ReduceOp.SUM)
+                for k, v in metrics.items():
+                    tensor = torch.tensor(v, device=self.trainer.model.device)
+                    torch.distributed.all_reduce(
+                        tensor, op=torch.distributed.ReduceOp.SUM
+                    )
+                    metrics[k] = (tensor / world_size).item()
 
+            # ---- Prefix metrics for TensorBoard ----
+            metrics = {
+                f"eval/{k}": v
+                for k, v in metrics.items()
+            }
+            metrics["step"] = state.global_step
 
-            # ---- Compute recall@k (rank 0 only) ----
+            # ---- Log ----
+            self.trainer.log(metrics)
+
             if rank == 0:
-                total = total_tensor.item()
-                final_metrics = {
-                    f"eval/recall_{k}": hits_tensor[i].item() / max(total, 1)
-                    for i, k in enumerate(ks)
-                }
-                final_metrics["step"] = state.global_step
-
-                # ---- Log ----
-                self.trainer.log(final_metrics)
-
                 print(
                     f"\n[Custom eval @ step {state.global_step}] "
-                    f"{final_metrics}"
+                    f"{metrics}"
                 )
 
-            return control
+        return control
 
 
 class SaveBestModelCallback(TrainerCallback):
@@ -348,7 +329,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(vars(Params))
 
     MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
-    NUM_WORKERS = 1
+    NUM_WORKERS = 2
 
     # --- Training arguments ---
     training_args = TrainingArguments(
@@ -367,8 +348,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         save_total_limit=1,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        # eval_strategy="no",
-        eval_steps=10,
+        eval_steps=1000,
         optim="adamw_torch",
         bf16=True,          # enable bfloat16 (H100 optimized)
         fp16=False,         
@@ -422,11 +402,12 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=10,
+        eval_steps=1000,
+        eval_data_collator=lambda batch: no_processing_collator(batch),
     )
     trainer.add_callback(callback)
 
-    trainer.add_callback(EpochSeedCallback())
+    # trainer.add_callback(EpochSeedCallback())
 
     if params.CHECK_POINT == 0:
         trainer.train()
@@ -440,7 +421,7 @@ def main():
 
     parser.add_argument("--LR", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--WARMUP_STEPS", type=int, default=1000, help="Number of warmup steps")
-    parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=2, help="Training batch size")
+    parser.add_argument("--TRAIN_BATCH_SIZE", type=int, default=32, help="Training batch size")
     parser.add_argument("--LORA_RANK", type=int, default=16, help="Rank of LoRA adaptor")
     parser.add_argument("--LORA_RATIO", type=float, default=1, help="LoRA adapter ratio")
     parser.add_argument("--TOTAL_STEPS", type=int, default=10000, help="Number of total training steps")
@@ -463,31 +444,20 @@ def main():
     print(vars(Params))
 
     # Load model and tokenizer in local device
-    base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
-    # save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
-    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_sid_alignment"
-    # Load model to cpu first and let torchrun handle the device placement
-    model, tokenizer = load_checkpoint(base_model_name, save_dir) 
-    print(f"model_device: {model.device}")
-    old_vocab_size = 128_256
-    print(tokenizer.eos_token)
-    
+    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_merged_think_sft_model_{0}"
+    model = AutoModelForCausalLM.from_pretrained(
+        model_dir,
+        dtype=torch.bfloat16,
+        # dtype=torch.float32,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, fix_mistral_regex=True)
+    tokenizer.padding_side='left'
+
+    # Dataset
     train_dataset = sample_sequence_data.SampleSeqDataset()
 
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["1m"])
-
-    SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 1000
-    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    eval_dataset = Subset(eval_dataset, indices)
-    print(f"---Eval dataset size: {len(eval_dataset)}")
-
-    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "gen_eval", ["1m"])
 
     check_idx = 3
     print(eval_dataset[check_idx])
