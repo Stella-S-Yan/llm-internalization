@@ -120,12 +120,6 @@ def evaluate_sequence_recall(
                 for k in range(num_return_sequences)
             ]
 
-            # Extract <sid> from generated outputs
-            # pred_sids = [
-            #     (m.group(1).strip() if (m := SID_PATTERN.search(t)) else None)
-            #     for t in generations
-            # ]
-
             # All levels
             hits = [solutions[i]["sid"] in g for g in generations]
 

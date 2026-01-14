@@ -7,13 +7,16 @@ DDP using all GPUs available.
 $ torchrun --nproc_per_node=8 train_thinking_sft.py
 """
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
+
+
 import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import argparse
 import train_thinking
-import numpy as np
 import random
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -21,22 +24,10 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers import TrainerCallback
 from torch.utils.data import Subset
-from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
-import re
 from functools import partial
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SID_PATTERN = re.compile(r"<sid>(.*?)<")
-
-# Set seeds for reproducibility
-seed = 411
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-np.random.seed(seed)
-random.seed(seed)
 
 
 class Params:
@@ -112,14 +103,15 @@ def evaluate_sequence_recall(
     model.eval()
     device = model.device
 
-    # Initialize recall lists
-    recalls_dict = {k: [] for k in top_k_list}
+    local_hits = {k: 0 for k in top_k_list}
+    local_total = 0
     printed = False  # track if we've printed already
+    max_k = max(top_k_list)
 
     # Process dataset in batches
     for batch in tqdm(eval_loader, desc="Evaluating"):
-        prompts = batch["gen_prompt"]
-        targets = batch["gen_target"]
+        prompts = batch["prompt"]
+        solutions = batch["solution"]
 
         # Tokenize batch
         inputs = tokenizer(
@@ -130,75 +122,84 @@ def evaluate_sequence_recall(
         ).to(device)
 
         batch_size = len(prompts)
-        max_k = max(top_k_list)
-
         
+        prompt_lens = inputs["attention_mask"].sum(dim=1)
+
         # Generate sequences for the batch
-        outputs = model.generate(
+        gen_out = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, max(top_k_list)),
-            num_return_sequences=max(top_k_list),
+            num_beams=max(num_beams, max_k),
+            num_return_sequences=max_k,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
         )
 
-        # Reshape outputs: (batch_size, num_return_sequences, seq_len)
-        batch_outputs = outputs.view(batch_size, max(top_k_list), -1)
+        sequences = gen_out.sequences
+        scores = gen_out.sequences_scores
+
+        # (batch, beams, seq_len)
+        sequences = sequences.view(batch_size, max_k, -1)
+        scores = scores.view(batch_size, max_k)
 
         # Decode and compute top-k recall
         for i in range(batch_size):
-            prompt_len = inputs["input_ids"].size(1)
-            decoded_outputs = [
-                tokenizer.decode(batch_outputs[i, k, prompt_len:], skip_special_tokens=True)
-                for k in range(max_k)
+            # ---- Sort beams by descending score ----
+            order = torch.argsort(scores[i], descending=True)
+            sorted_seqs = sequences[i][order]
+
+            sid = solutions[i]['sid']
+            generations = [
+                tokenizer.decode(
+                    sorted_seqs[j, prompt_lens[i]:],
+                    skip_special_tokens=True,
+                )
+                for j in range(max_k)
             ]
-            # print(decoded_outputs)
-            match = SID_PATTERN.search(targets[i])
-            if match:
-                sid_value = match.group(1)
-            else:
-                sid_value = "NONE"
 
-            hits = [1 if sid_value in o else 0 for o in decoded_outputs]
+            # ---- Recall@k with short-circuit ----
             for k in top_k_list:
-                recalls_dict[k].append(int(any(hits[:k])))
+                hit = False
+                for j in range(k):
+                    if sid in generations[j]:
+                        hit = True
+                        break
+                local_hits[k] += int(hit)
 
-
-        # ---- Print one random batch example ----
+        # ---- Print one example ----
         if print_random_example and not printed:
-            rand_idx = random.randint(0, batch_size - 1)
+            idx = random.randint(0, batch_size - 1)
             print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[rand_idx]}")
-            print(f"Target:\n{targets[rand_idx]}")
-            for k, gen in enumerate(decoded_outputs[:5]):  # show top 5 generations
-                print(f"[Gen {k+1}] {gen}")
+            print(f"Prompt:\n{prompts[idx]}")
+            print(f"Solution:\n{solutions[idx]}")
+            for j in range(min(3, max_k)):
+                print(f"[Gen {j+1}] {generations[j]}")
             print("========================\n")
             printed = True
-        # ----------------------------------------
 
-    # Compute mean recall
-    recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
-    return recalls_mean
+        local_total += batch_size
+
+    return local_hits, local_total
 
 
 def no_processing_collator(batch):
     return {
-        key: [example[key] for example in batch]
-        for key in batch[0].keys()
+        "prompt": [x["prompt"] for x in batch],
+        "solution": [x["solution"] for x in batch]
     }
 
 
 class GenerateEvalCallback(TrainerCallback):
-    def __init__(self, trainer, eval_datasets, tokenizer, eval_fn, eval_steps, eval_data_collator):
+    def __init__(self, trainer, eval_dataset, tokenizer, eval_fn, eval_steps):
         self.trainer = trainer
-        self.eval_datasets = eval_datasets
+        self.eval_dataset = eval_dataset
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
-        self.batch_size = 8
+        self.batch_size = 16
         self.best_metric = None  # Track best metric
-        self.eval_data_collator = eval_data_collator
 
     # def on_step_end(self, args, state, control, **kwargs):
     def on_evaluate(self, args, state, control, **kwargs):
@@ -215,8 +216,7 @@ class GenerateEvalCallback(TrainerCallback):
             rank = torch.distributed.get_rank() if is_ddp else 0
             world_size = torch.distributed.get_world_size() if is_ddp else 1
 
-            for dataset_name, eval_dataset in self.eval_datasets.items():
-
+            for dataset_name, eval_dataset in self.eval_dataset.items():
                 # ---- Sampler (per dataset) ----
                 sampler = (
                     DistributedSampler(eval_dataset, shuffle=False)
@@ -227,56 +227,71 @@ class GenerateEvalCallback(TrainerCallback):
                 eval_loader = DataLoader(
                     eval_dataset,
                     batch_size=self.batch_size,
+                    num_workers=4,
                     sampler=sampler,
                     shuffle=False,
-                    collate_fn=self.eval_data_collator,  # or your custom collate_fn
+                    collate_fn=no_processing_collator,
                 )
 
                 # tqdm only on rank 0
                 if rank == 0:
                     eval_loader = tqdm(
                         eval_loader,
-                        desc=f"Eval [{dataset_name}] @ step {state.global_step}",
+                        desc=f"Eval @ step {state.global_step}",
                     )
 
                 # ---- Custom generate-based eval ----
-                metrics = self.eval_fn(
+                local_hits, local_total = self.eval_fn(
                     self.trainer.model,
                     self.tokenizer,
                     eval_loader,
                 )
+                device = self.trainer.model.device
 
-                # ---- DDP reduce (mean) ----
+                # ---- Prepare tensors ----
+                ks = sorted(local_hits.keys())  # ensure stable order
+                hits_tensor = torch.tensor(
+                    [local_hits[k] for k in ks],
+                    device=device,
+                    dtype=torch.long,
+                )
+                total_tensor = torch.tensor(
+                    [local_total],
+                    device=device,
+                    dtype=torch.long,
+                )
+
+                # ---- DDP reduce (SUM ONLY) ----
                 if is_ddp:
-                    for k, v in metrics.items():
-                        tensor = torch.tensor(v, device=self.trainer.model.device)
-                        torch.distributed.all_reduce(
-                            tensor, op=torch.distributed.ReduceOp.SUM
-                        )
-                        metrics[k] = (tensor / world_size).item()
+                    torch.distributed.all_reduce(hits_tensor, op=torch.distributed.ReduceOp.SUM)
+                    torch.distributed.all_reduce(total_tensor, op=torch.distributed.ReduceOp.SUM)
 
-                # ---- Prefix metrics for TensorBoard ----
-                metrics = {
-                    f"eval/{dataset_name}/{k}": v
-                    for k, v in metrics.items()
-                }
-                metrics["step"] = state.global_step
 
-                # ---- Log ----
-                self.trainer.log(metrics)
-
+                # ---- Compute recall@k (rank 0 only) ----
                 if rank == 0:
+                    total = total_tensor.item()
+                    final_metrics = {
+                        f"eval/{dataset_name}_recall_{k}": hits_tensor[i].item() / max(total, 1)
+                        for i, k in enumerate(ks)
+                    }
+                    final_metrics["step"] = state.global_step
+
+                    # ---- Log ----
+                    self.trainer.log(final_metrics)
+
                     print(
                         f"\n[Custom eval @ step {state.global_step}] "
-                        f"[{dataset_name}] {metrics}"
+                        f"{final_metrics}"
                     )
 
-        return control
+            return control
 
 
-def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, params):
+def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
+
+    NUM_WORKERS = 1
 
     # --- Training arguments ---
     training_args = TrainingArguments(
@@ -292,9 +307,11 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         lr_scheduler_type="cosine",
         logging_steps=2000,
         save_strategy="steps",
+        save_steps=2000,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         save_total_limit=10,
+        load_best_model_at_end=False,
         eval_strategy="steps",
         eval_steps=2000,
         optim="adamw_torch",
@@ -302,7 +319,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         fp16=False,         # optional: if you want fp16 instead
         report_to="tensorboard",
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=200,
+        dataloader_num_workers=NUM_WORKERS,
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True
     )
@@ -344,15 +361,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, para
         data_collator=collator_fn
     )
 
-    # callback = GenerateEvalCallback(
-    #     trainer=trainer,
-    #     eval_datasets=gen_eval_datasets,
-    #     tokenizer=tokenizer,
-    #     eval_fn=evaluate_sequence_recall,
-    #     eval_steps=1000,
-    #     eval_data_collator=lambda batch: no_processing_collator(batch),
-    # )
-    # trainer.add_callback(callback)
+    callback = GenerateEvalCallback(
+        trainer=trainer,
+        eval_dataset=gen_eval_dataset,
+        tokenizer=tokenizer,
+        eval_fn=evaluate_sequence_recall,
+        eval_steps=2000,
+    )
+    trainer.add_callback(callback)
 
     if params.CHECK_POINT == 0:
         trainer.train()
@@ -410,13 +426,13 @@ def main():
     # eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
     # print(eval_dataset[0])
     
-    gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Toys_and_Games"])
-    gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Sports_and_Outdoors"])
-    gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "gen_eval", ["Beauty"])
+    gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
+    # gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "grpo", ["Sports_and_Outdoors"])
+    # gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
     
     
     SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 6000
+    GEN_EVAL_SUBSET_SIZE = 5000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
@@ -426,13 +442,13 @@ def main():
     indices = rng.sample(range(len(gen_eval_dataset_1)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
-    gen_eval_dataset_2 = Subset(gen_eval_dataset_2, indices)
-    gen_eval_dataset_3 = Subset(gen_eval_dataset_3, indices)
+    # gen_eval_dataset_2 = Subset(gen_eval_dataset_2, indices)
+    # gen_eval_dataset_3 = Subset(gen_eval_dataset_3, indices)
 
     gen_eval_datasets = {
         "toys": gen_eval_dataset_1,
-        "sports": gen_eval_dataset_2,
-        "beauty": gen_eval_dataset_3
+        # "sports": gen_eval_dataset_2,
+        # "beauty": gen_eval_dataset_3
     }
 
     print(f"---Gen Eval dataset size: {len(eval_dataset)}")

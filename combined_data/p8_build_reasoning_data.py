@@ -30,23 +30,15 @@ PATTERN = r"A\d+\s+B\d+\s+C\d+\s+D\d+"
 
 
 def most_frequent_Ax(ids):
-    """
-    ids: list of strings like "A3 B5 C7 D2"
-    returns: most frequent Ax (e.g. "A3") or None
-    """
-    ax_list = [id_.split()[0] for id_ in ids]
+    if not ids: return None
+    ax_list = [x.split(maxsplit=1)[0] for x in ids]
     counts = Counter(ax_list)
+    if not counts: return None
+    most_common = counts.most_common(2)
+    best, freq = most_common[0]
+    if len(most_common) > 1 and most_common[1][1] == freq: return None
+    return best
 
-    if not counts:
-        return None
-
-    most_common, freq = counts.most_common(1)[0]
-
-    # Check if it's strictly most frequent
-    if list(counts.values()).count(freq) > 1:
-        return None
-
-    return most_common
 
 
 def do_the_work(tokenizer, split):
@@ -118,7 +110,7 @@ def do_the_work(tokenizer, split):
         )
 
         solution = {
-            "freq": freq_A,
+            "freq": freq_A if freq_A else 'None',
             "cat": target_sid_cat,
             "sid": target_sid,
         }
@@ -152,9 +144,9 @@ def main():
     model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
-    do_the_work(tokenizer, "train")
+    # do_the_work(tokenizer, "train")
     do_the_work(tokenizer, "eval")
-    # do_the_work(tokenizer, "test")
+    do_the_work(tokenizer, "test")
     # do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":

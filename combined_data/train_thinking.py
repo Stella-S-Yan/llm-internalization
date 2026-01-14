@@ -116,11 +116,16 @@ class StreamingReasoningDataset(IterableDataset):
     def _process_item(self, record):
         record = orjson.loads(record.decode("utf-8"))
         if self.datatype == "sft":
+            # OPTIMIZATION: Convert List -> Numpy -> Tensor
+            # This is significantly faster than List -> Tensor
+            input_ids = np.array(record["input_ids"], dtype=np.int64)
+            labels = np.array(record["labels"], dtype=np.int64)
             return {
+                # torch.from_numpy creates a tensor sharing memory with the numpy array
                 # "input_ids": record["input_ids"],
                 # "labels": record["labels"],
-                "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
-                "labels": torch.tensor(record["labels"], dtype=torch.long)
+                "input_ids": torch.from_numpy(input_ids),
+                "labels": torch.from_numpy(labels)
             }
         elif self.datatype == "grpo":
             return {
