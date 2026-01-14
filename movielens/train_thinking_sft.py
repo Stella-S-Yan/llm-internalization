@@ -16,29 +16,20 @@ import random
 import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from transformers import TrainerCallback
-import numpy as np
-import bagz
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 from torch.utils.data import Subset
 import random
-import re
 from combined_data import train_thinking
 from functools import partial
 import sample_sequence_data
 
-
-
-# Set seeds for reproducibility
-seed = 411
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-np.random.seed(seed)
-random.seed(seed)
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 
 class Params:
