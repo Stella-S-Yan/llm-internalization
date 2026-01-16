@@ -33,6 +33,7 @@ import re
 import random
 import os
 import argparse
+from torch.utils.data import Subset
 
 
 def ddp_init():
@@ -53,7 +54,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=128,
+    max_new_tokens=64,
     top_k_list=(1, 5, 10),
     print_random_example=True,
 ):
@@ -64,15 +65,13 @@ def evaluate_sequence_recall(
     """
     model.eval()
     model = model.module if hasattr(model, "module") else model
-    device = next(model.parameters()).device
+    device = model.device
 
     local_hits = {k: 0 for k in top_k_list}
     local_total = 0
-
-    max_k = max(top_k_list)
-    num_return_sequences = max_k
-
     printed = False
+    max_k = max(top_k_list)
+    
 
     for batch in tqdm(eval_loader, desc="Evaluating"):
         prompts = batch["prompt"]
@@ -83,20 +82,18 @@ def evaluate_sequence_recall(
             return_tensors="pt",
             padding=True,
             truncation=True,
-        )
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        ).to(device)
 
         batch_size = len(prompts)
 
-        # ---- Correct prompt lengths (padding-safe) ----
-        prompt_lens = inputs["attention_mask"].sum(dim=1)
+        input_seq_len = inputs["input_ids"].shape[1]
 
         # ---- Generate with scores ----
         gen_out = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, num_return_sequences),
-            num_return_sequences=num_return_sequences,
+            num_beams=max(num_beams, max_k),
+            num_return_sequences=max_k,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
             return_dict_in_generate=True,
@@ -107,8 +104,8 @@ def evaluate_sequence_recall(
         scores = gen_out.sequences_scores
 
         # (batch, beams, seq_len)
-        sequences = sequences.view(batch_size, num_return_sequences, -1)
-        scores = scores.view(batch_size, num_return_sequences)
+        sequences = sequences.view(batch_size, max_k, -1)
+        scores = scores.view(batch_size, max_k)
 
         for i in range(batch_size):
             # ---- Sort beams by descending score ----
@@ -120,10 +117,10 @@ def evaluate_sequence_recall(
             # ---- Decode once ----
             generations = [
                 tokenizer.decode(
-                    sorted_seqs[j, prompt_lens[i]:],
+                    sorted_seqs[j, input_seq_len:],
                     skip_special_tokens=True,
                 )
-                for j in range(num_return_sequences)
+                for j in range(max_k)
             ]
 
             # ---- Recall@k with short-circuit ----
@@ -141,7 +138,7 @@ def evaluate_sequence_recall(
             print("\n=== Random Example ===")
             print(f"Prompt:\n{prompts[idx]}")
             print(f"Solution:\n{solutions[idx]}")
-            for j in range(min(5, num_return_sequences)):
+            for j in range(min(3, max_k)):
                 print(f"[Gen {j+1}] {generations[j]}")
             print("========================\n")
             printed = True
@@ -174,8 +171,11 @@ def main(run_num):
         dtype=torch.bfloat16,
         # dtype=torch.float32,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, fix_mistral_regex=True)
+    # tokenizer = AutoTokenizer.from_pretrained(model_dir, fix_mistral_regex=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
     tokenizer.padding_side='left'
+    print(tokenizer.eos_token)
+    print(tokenizer.eos_token_id)
 
     model = model.to(device)
 
@@ -183,10 +183,22 @@ def main(run_num):
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
   
     # --- Prepare dataset ---
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
-    print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
-    # eval_dataset = Subset(eval_dataset, range(32*8))
-    print(gen_eval_dataset[0])
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ['1m'])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
+
+    SEED = 411
+    GEN_EVAL_SUBSET_SIZE = 1000
+    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+
+    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    eval_dataset = Subset(eval_dataset, indices)
+
+    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+
+    print(gen_eval_dataset[10])
 
     
     if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
@@ -199,7 +211,7 @@ def main(run_num):
 
     eval_loader = DataLoader(
         gen_eval_dataset,
-        batch_size=32,
+        batch_size=16,
         sampler=sampler,
         shuffle=False,
         collate_fn=collate_fn
@@ -209,9 +221,6 @@ def main(run_num):
         model=model,
         tokenizer=tokenizer,
         eval_loader=eval_loader,
-        num_beams=20,
-        max_new_tokens=128,
-        top_k_list=[1, 5, 10],
     )
 
     # -----------------------------
