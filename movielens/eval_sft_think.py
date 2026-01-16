@@ -183,22 +183,22 @@ def main(run_num):
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
   
     # --- Prepare dataset ---
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ['1m'])
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
+    # gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ['1m'])
+    gen_eval_dataset = train_thinking.ReasoningDataset("test", "grpo", ["1m"])
 
-    SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 1000
-    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+    # SEED = 411
+    # GEN_EVAL_SUBSET_SIZE = 1000
+    # rng = random.Random(SEED)   # <- LOCAL RNG (important!)
 
-    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    eval_dataset = Subset(eval_dataset, indices)
+    # indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    # indices = sorted(indices)   # optional but recommended
+    # eval_dataset = Subset(eval_dataset, indices)
 
-    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    # indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    # indices = sorted(indices)   # optional but recommended
+    # gen_eval_dataset = Subset(gen_eval_dataset, indices)
 
-    print(gen_eval_dataset[10])
+    # print(gen_eval_dataset[10])
 
     
     if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
