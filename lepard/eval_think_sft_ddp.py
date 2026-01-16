@@ -177,7 +177,7 @@ def main():
         dtype=torch.bfloat16,
         # dtype=torch.float32,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, fix_mistral_regex=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
     tokenizer.padding_side='left'
 
     model = model.to(device)
