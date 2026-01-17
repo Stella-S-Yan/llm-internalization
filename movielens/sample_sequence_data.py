@@ -21,7 +21,7 @@ prediction:\n
 TARGET_TEMPLATE = """
 <freq>{freq_A}</freq>
 <year>{target_year}</year>
-<cat>{target_genre}</cat>
+<genre>{target_genre}</genre>
 <sid>{target_sid}</sid>{eos}
 """
 

@@ -48,7 +48,7 @@ class GenFixedData():
 
         # Eval
         sid_seq = record["sequence"][:-1]
-        sid_seq = sid_seq[-config.MAX_HISTORY_LEN+1:]
+        sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
         input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.eval_data.append( {
                 "uid": uid,
