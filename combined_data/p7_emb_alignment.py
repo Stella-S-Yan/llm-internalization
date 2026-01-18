@@ -47,7 +47,7 @@ MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alig
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
 BATCH_SIZE = 2048
 TOTAL_STEPS = 4_000     # plateau at step 2k
-LR =  6e-3         #  
+LR =  1e-3         #  
 SCHEDULE = 'cosine'
 
 # temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
