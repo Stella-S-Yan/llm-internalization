@@ -170,7 +170,9 @@ class SampleSeqDataset(Dataset):
         self.data = []
         review_types = ['1m', '20m']
         for review_type in review_types:
-            records = bagz_utils.read_record(config.USER_SEQUENCE)
+            SEQUENCE_file = os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{review_type}_user_sequence.bagz" )
+            records = bagz_utils.read_record(SEQUENCE_file)
+            print(f"--- {review_type} # records: {len(records)}")
             for r in records:
                 self.data.append((r, review_type))
 
