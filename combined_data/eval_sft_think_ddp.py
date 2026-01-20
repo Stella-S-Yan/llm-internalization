@@ -35,6 +35,7 @@ import os
 import argparse
 import hashlib
 from torch.utils.data import Subset
+import math
 
 SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
@@ -124,13 +125,27 @@ def evaluate_sequence_recall(
             ]
 
             # Check hits
-            is_correct = [solutions[i]["sid"] in g for g in generations]
+            hits = [solutions[i]["sid"] in g for g in generations]
 
-            sample_hits = []
-            for k in top_k_list:
-                sample_hits.append(int(any(is_correct[:k])))
+            # Find the first index where hit is True (1-based rank)
+            if True in hits:
+                # .index() returns 0-based index of first True
+                best_rank = hits.index(True) + 1 
+            else:
+                best_rank = float('inf') # Not found
             
-            local_results[unique_id] = sample_hits
+            # Store the RANK, not the boolean list
+            local_results[unique_id] = best_rank
+
+            # ---- Print one example ----
+            if print_random_example and not printed:
+                print("\n=== Random Example ===")
+                print(f"Prompt:\n{prompts[i]}")
+                print(f"Solution:\n{solutions[i]}")
+                for j in range(min(3, max_k)):
+                    print(f"[Gen {j+1}] {generations[j]}")
+                print("========================\n")
+                printed = True
 
 
     return local_results
@@ -188,15 +203,15 @@ def main(run_num):
     # --- Prepare dataset ---
     gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
     SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 10
+    GEN_EVAL_SUBSET_SIZE = 5000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
     indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     gen_eval_dataset = Subset(gen_eval_dataset, indices)
     print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
     # eval_dataset = Subset(eval_dataset, range(32*8))
-    for i in range(len(gen_eval_dataset)):
-        print(gen_eval_dataset[i]["solution"]["uid"])
+    # for i in range(len(gen_eval_dataset)):
+    #     print(gen_eval_dataset[i]["solution"]["uid"])
     
 
     sampler = None
@@ -222,8 +237,9 @@ def main(run_num):
         num_beams=20,
         max_new_tokens=64,
         top_k_list=[1, 5, 10],
+        print_random_example=False
     )
-    print(f"---- {local_rank}: {local_results}")
+    # print(f"---- {local_rank}: {local_results}")
 
     # 5. Gather & Deduplicate
     if dist.is_initialized():
@@ -233,22 +249,44 @@ def main(run_num):
         # Collect dicts from all GPUs
         dist.all_gather_object(gathered_results, local_results)
         
-        # Only Rank 0 computes final score
-        if local_rank == 0:
-            final_results = {}
-            for rank_dict in gathered_results:
-                # This .update() automatically dedupes.
-                # If Rank 0 and Rank 3 both processed the same padding sample,
-                # the second update simply overwrites the first with the same result.
-                final_results.update(rank_dict)
-                
-            calculate_and_print_metrics(final_results)
+        # Merge dicts (Deduplication happens here automatically!)
+        final_results = {}
+        for rank_dict in gathered_results:
+            final_results.update(rank_dict)
     else:
-        # Single GPU fallback
-        calculate_and_print_metrics(local_results)
+        final_results = local_results
 
+    # 3. Compute Metrics (Rank 0 only)
+    if local_rank == 0:
+        total = len(final_results)
+        print(f"----- Total data count: {total}")
+        ks = [1, 5, 10]  # Define your K values here
+        metrics = {}
 
+        if total > 0:
+            # Extract all ranks
+            all_ranks = list(final_results.values())
 
+            for k in ks:
+                # --- Recall@k ---
+                # Count how many items have a rank <= k
+                hits = sum(1 for r in all_ranks if r <= k)
+                metrics[f"recall_{k}"] = hits / total
+
+                # --- NDCG@k ---
+                # Sum(1 / log2(rank + 1)) for ranks <= k
+                dcg = sum(1.0 / math.log2(r + 1) for r in all_ranks if r <= k)
+                
+                # IDCG is ideal case: we assume 1 relevant item per query, so IDCG@k = 1.0
+                # Thus NDCG = DCG / 1.0
+                metrics[f"eval/ndcg_{k}"] = dcg / total
+        else:
+            # Handle empty dataset case
+            for k in ks:
+                metrics[f"eval/recall_{k}"] = 0.0
+                metrics[f"eval/ndcg_{k}"] = 0.0
+
+        print(metrics)
 
     
 

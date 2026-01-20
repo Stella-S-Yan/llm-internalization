@@ -12,22 +12,16 @@ $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 
 import config
 import torch
-from torch.utils.data import Dataset, DataLoader, IterableDataset, get_worker_info
+from torch.utils.data import Dataset, DataLoader
 from transformers import Trainer, TrainerCallback
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.utils.data import Subset
 import math
 from torch.optim.lr_scheduler import LambdaLR
 import os
 from utils import bagz_utils
-import json
-import orjson
-import torch.distributed as dist
-import bagz
-import random
 
 
 class ReasoningDataset(Dataset):
@@ -41,13 +35,12 @@ class ReasoningDataset(Dataset):
 
         # === CRITICAL FIX: FORCE DETERMINISTIC ORDER ===
         # DDP requires self.data to be identical (index-for-index) on every GPU.
-        record = self.data[0]
-        uid = record['solution']['uid']
         self.data.sort(key=lambda x: x["solution"]["uid"])
 
 
     def __len__(self):
         return len(self.data)
+    
 
     def __getitem__(self, idx):
         record = self.data[idx]

@@ -113,6 +113,7 @@ def do_the_work(tokenizer, split):
             "freq": freq_A if freq_A else 'None',
             "cat": target_sid_cat,
             "sid": target_sid,
+            "uid": uid
         }
 
 
@@ -144,7 +145,7 @@ def main():
     model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
-    # do_the_work(tokenizer, "train")
+    do_the_work(tokenizer, "train")
     do_the_work(tokenizer, "eval")
     do_the_work(tokenizer, "test")
     # do_the_work(tokenizer, "train_eval")
