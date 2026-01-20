@@ -27,132 +27,7 @@ import json
 import orjson
 import torch.distributed as dist
 import bagz
-
-
-class StreamingReasoningDataset(IterableDataset):
-    def __init__(
-        self,
-        split,
-        datatype: str,
-        sources,
-        block_size=1024,
-        seed=42,
-    ):
-        self.file_path = os.path.join(
-            config.PROCESSED_DATA_DIR,
-            f"{config.DATA_SOURCE}_{sources}_think_data_{split}.bagz",
-        )
-        self.datatype = datatype
-        self.block_size = block_size
-        self.seed = seed
-        self.epoch = 0  # will be updated by Trainer    
-
-    # ---------------------------
-    # Epoch control (Trainer calls this automatically)
-    # ---------------------------
-    def set_epoch(self, epoch: int):
-        self.epoch = epoch
-
-    def __iter__(self):
-        # ---------- DDP info ----------
-        if dist.is_available() and dist.is_initialized():
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-        else:
-            rank = 0
-            world_size = 1
-
-        # ---------- DataLoader worker info ----------
-        worker_info = get_worker_info()
-        if worker_info is None:
-            worker_id = 0
-            num_workers = 1
-        else:
-            worker_id = worker_info.id
-            num_workers = worker_info.num_workers
-
-        # ---------- Global worker identity ----------
-        global_worker_id = rank * num_workers + worker_id
-        total_workers = world_size * num_workers
-
-        # ---------- Worker- & epoch-specific RNG ----------
-        rng = torch.Generator()
-        rng.manual_seed(
-            self.seed
-            + self.epoch * 10_000
-            + global_worker_id
-        )
-
-        reader = bagz.Reader(self.file_path)
-
-        buffer = []
-
-        for i, item in enumerate(reader):
-            # Global sharding (CRITICAL)
-            if i % total_workers != global_worker_id:
-                continue
-
-            processed = self._process_item(item)
-            buffer.append(processed)
-
-            if len(buffer) >= self.block_size:
-                idx = torch.randint(
-                    0, len(buffer), (1,), generator=rng
-                ).item()
-                yield buffer[idx]
-                buffer[idx] = buffer[-1]
-                buffer.pop()
-
-
-        # Drain remaining buffer
-        while buffer:
-            idx = torch.randint(
-                0, len(buffer), (1,), generator=rng
-            ).item()
-            yield buffer[idx]
-            buffer[idx] = buffer[-1]
-            buffer.pop()
-
-    def _process_item(self, record):
-        record = orjson.loads(record.decode("utf-8"))
-        if self.datatype == "sft":
-            # OPTIMIZATION: Convert List -> Numpy -> Tensor
-            # This is significantly faster than List -> Tensor
-            input_ids = np.array(record["input_ids"], dtype=np.int64)
-            labels = np.array(record["labels"], dtype=np.int64)
-            return {
-                # torch.from_numpy creates a tensor sharing memory with the numpy array
-                # "input_ids": record["input_ids"],
-                # "labels": record["labels"],
-                "input_ids": torch.from_numpy(input_ids),
-                "labels": torch.from_numpy(labels)
-            }
-        elif self.datatype == "grpo":
-            return {
-                "prompt": record["prompt"],
-                "solution": record["solution"],
-            }
-        elif self.datatype == "raw_text_vllm":
-            return {
-                "prompt": {
-                    "prompt": record["prompt"],
-                    "prompt_token_ids": record["prompt_token_ids"].tolist(),
-                },
-                "target": record["target"],
-                "solution": record["solution"],
-            }
-        elif self.datatype == "raw_text":
-            return {
-                "prompt_token_ids": record["prompt_token_ids"],
-                "target": record["target"],
-            }
-        elif self.datatype == "gen_eval":
-            return {
-                "gen_prompt": record["prompt"],
-                "gen_target": record["target"],
-            }
-        else:
-            raise ValueError(f"Invalid datatype: {self.datatype}")
+import random
 
 
 class ReasoningDataset(Dataset):
@@ -163,6 +38,12 @@ class ReasoningDataset(Dataset):
         for src in sources:
             data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_think_data_{split}.bagz')
             self.data.extend(bagz_utils.read_record(data_path))
+
+        # === CRITICAL FIX: FORCE DETERMINISTIC ORDER ===
+        # DDP requires self.data to be identical (index-for-index) on every GPU.
+        record = self.data[0]
+        uid = record['solution']['uid']
+        self.data.sort(key=lambda x: x["solution"]["uid"])
 
 
     def __len__(self):

@@ -123,7 +123,7 @@ def evaluate_sequence_recall(
 
         batch_size = len(prompts)
         
-        prompt_lens = inputs["attention_mask"].sum(dim=1)
+        input_seq_len = inputs["input_ids"].shape[1]
 
         # Generate sequences for the batch
         gen_out = model.generate(
@@ -153,7 +153,7 @@ def evaluate_sequence_recall(
             sid = solutions[i]['sid']
             generations = [
                 tokenizer.decode(
-                    sorted_seqs[j, prompt_lens[i]:],
+                    sorted_seqs[j, input_seq_len:],
                     skip_special_tokens=True,
                 )
                 for j in range(max_k)
@@ -418,10 +418,10 @@ def main():
 
     # train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
     # eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Beauty"])
-    check_idx = 3
-    print(eval_dataset[check_idx])
-    print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
-    print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
+    # check_idx = 3
+    # print(eval_dataset[check_idx])
+    # print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
+    # print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
 
     # eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
     # print(eval_dataset[0])
@@ -444,6 +444,8 @@ def main():
     gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
     # gen_eval_dataset_2 = Subset(gen_eval_dataset_2, indices)
     # gen_eval_dataset_3 = Subset(gen_eval_dataset_3, indices)
+
+    print(gen_eval_dataset_1[10])
 
     gen_eval_datasets = {
         "toys": gen_eval_dataset_1,

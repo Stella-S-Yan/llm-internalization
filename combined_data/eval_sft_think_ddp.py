@@ -33,6 +33,8 @@ import re
 import random
 import os
 import argparse
+import hashlib
+from torch.utils.data import Subset
 
 SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
@@ -69,17 +71,16 @@ def evaluate_sequence_recall(
     # Pick device from the model's first parameter
     device = next(model.parameters()).device
     
-    # We now store only raw hits, not full lists
-    local_hits = {k: 0 for k in top_k_list}
-    local_total = 0
+    # Store results as: {unique_hash: [hit_k1, hit_k2, ...]}
+    local_results = {}
 
     max_k = max(top_k_list)
     num_return_sequences = max_k
 
     printed = False
 
-    # for batch in tqdm(eval_loader, desc="Evaluating"):
-    for batch in eval_loader:
+    for batch in tqdm(eval_loader, desc="Evaluating"):
+    # for batch in eval_loader:
         prompts = batch["prompt"]
         solutions = batch["solution"]
 
@@ -92,7 +93,6 @@ def evaluate_sequence_recall(
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-
         batch_size = len(prompts)
         prompt_len = inputs["input_ids"].size(1)
 
@@ -112,6 +112,9 @@ def evaluate_sequence_recall(
 
         # Loop over batch
         for i in range(batch_size):
+            # --- CREATE UNIQUE ID ---
+            unique_id = solutions[i]["uid"]
+
             generations = [
                 tokenizer.decode(
                     outputs[i, k, prompt_len:],
@@ -120,30 +123,18 @@ def evaluate_sequence_recall(
                 for k in range(num_return_sequences)
             ]
 
-            # All levels
-            hits = [solutions[i]["sid"] in g for g in generations]
+            # Check hits
+            is_correct = [solutions[i]["sid"] in g for g in generations]
 
+            sample_hits = []
             for k in top_k_list:
-                # if any of the first k generations hits
-                local_hits[k] += int(any(hits[:k]))
+                sample_hits.append(int(any(is_correct[:k])))
+            
+            local_results[unique_id] = sample_hits
 
-        # Print only once
-        if print_random_example and not printed:
-            idx = random.randint(0, batch_size - 1)
-            print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[idx]}")
-            print(f"Solution:\n{solutions[idx]}")
-            for k in range(min(5, num_return_sequences)):
-                print(f"[Gen {k+1}] {generations[k]}")
-            print("========================\n")
-            printed = True
 
-        local_total += batch_size
+    return local_results
 
-    return local_hits, local_total
-
-def unwrap_model(model):
-    return model.module if hasattr(model, "module") else model
 
 
 def collate_fn(batch):
@@ -176,33 +167,35 @@ def main(run_num):
   
     # --- Prepare dataset ---
     gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
+    SEED = 411
+    GEN_EVAL_SUBSET_SIZE = 10
+    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
     print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
     # eval_dataset = Subset(eval_dataset, range(32*8))
-    print(gen_eval_dataset[0])
-
+    for i in range(len(gen_eval_dataset)):
+        print(gen_eval_dataset[i]["solution"]["uid"])
     
-    if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-        rank = torch.distributed.get_rank()
-        # print("Rank: ", rank)
+
+    sampler = None
+    if dist.is_initialized():
+        # shuffle=False is critical for reproducibility, though the hash handles dedup regardless
         sampler = DistributedSampler(gen_eval_dataset, shuffle=False)
-    else:
-        rank = 0
-        sampler = None
-
-
-    batch_size = 64   # 64 may be too large for beam search
 
 
     eval_loader = DataLoader(
         gen_eval_dataset,
-        batch_size=batch_size,
+        batch_size=16,
         sampler=sampler,
         shuffle=False,
         collate_fn=collate_fn
     )
 
-
-    local_hits, local_total = evaluate_sequence_recall(
+    # 4. Run Evaluation
+    # Returns: { "hash123": [1, 1, 1], "hash456": [0, 1, 1] ... }
+    local_results = evaluate_sequence_recall(
         model=model,
         tokenizer=tokenizer,
         eval_loader=eval_loader,
@@ -210,30 +203,51 @@ def main(run_num):
         max_new_tokens=64,
         top_k_list=[1, 5, 10],
     )
+    print(f"---- {local_rank}: {local_results}")
 
-    # -----------------------------
-    # Aggregate across ranks
-    # -----------------------------
-    device = next(model.parameters()).device
-
-    hits_tensor = torch.tensor([local_hits[k] for k in [1,5,10]], device=device, dtype=torch.float32)
-    total_tensor = torch.tensor([local_total], device=device, dtype=torch.float32)
-
+    # 5. Gather & Deduplicate
     if dist.is_initialized():
-        dist.all_reduce(hits_tensor, op=dist.ReduceOp.SUM)
-        dist.all_reduce(total_tensor, op=dist.ReduceOp.SUM)
+        world_size = dist.get_world_size()
+        gathered_results = [None for _ in range(world_size)]
+        
+        # Collect dicts from all GPUs
+        dist.all_gather_object(gathered_results, local_results)
+        
+        # Only Rank 0 computes final score
+        if local_rank == 0:
+            final_results = {}
+            for rank_dict in gathered_results:
+                # This .update() automatically dedupes.
+                # If Rank 0 and Rank 3 both processed the same padding sample,
+                # the second update simply overwrites the first with the same result.
+                final_results.update(rank_dict)
+                
+            calculate_and_print_metrics(final_results)
+    else:
+        # Single GPU fallback
+        calculate_and_print_metrics(local_results)
 
-    # -----------------------------
-    # Compute global recall
-    # -----------------------------
-    if not dist.is_initialized() or dist.get_rank() == 0:
-        global_recalls = {
-            f"recall_{k}": (hits_tensor[i] / total_tensor.item()).item()
-            for i, k in enumerate([1,5,10])
-        }
-        print(global_recalls)
 
 
+def calculate_and_print_metrics(results_dict):
+    total = len(results_dict)
+    if total == 0:
+        print("No samples found.")
+        return
+
+    hits_sums = [0, 0, 0] # Corresponds to k=1, 5, 10
+    
+    for hits in results_dict.values():
+        for i, val in enumerate(hits):
+            hits_sums[i] += val
+
+    print("\n" + "="*30)
+    print(f"Final Deduplicated Results (Total: {total})")
+    k_list = [1, 5, 10]
+    for i, k in enumerate(k_list):
+        print(f"Recall@{k}: {hits_sums[i] / total:.4f}")
+    print("="*30)
+    
 
 if __name__ == "__main__":
     # 1. Create parser
