@@ -143,7 +143,27 @@ def collate_fn(batch):
         "solution": [x["solution"] for x in batch]
     }
 
+
+
+def calculate_and_print_metrics(results_dict):
+    total = len(results_dict)
+    if total == 0:
+        print("No samples found.")
+        return
+
+    hits_sums = [0, 0, 0] # Corresponds to k=1, 5, 10
     
+    for hits in results_dict.values():
+        for i, val in enumerate(hits):
+            hits_sums[i] += val
+
+    print("\n" + "="*30)
+    print(f"Final Deduplicated Results (Total: {total})")
+    k_list = [1, 5, 10]
+    for i, k in enumerate(k_list):
+        print(f"Recall@{k}: {hits_sums[i] / total:.4f}")
+    print("="*30)
+
 
 def main(run_num):
 
@@ -229,24 +249,7 @@ def main(run_num):
 
 
 
-def calculate_and_print_metrics(results_dict):
-    total = len(results_dict)
-    if total == 0:
-        print("No samples found.")
-        return
 
-    hits_sums = [0, 0, 0] # Corresponds to k=1, 5, 10
-    
-    for hits in results_dict.values():
-        for i, val in enumerate(hits):
-            hits_sums[i] += val
-
-    print("\n" + "="*30)
-    print(f"Final Deduplicated Results (Total: {total})")
-    k_list = [1, 5, 10]
-    for i, k in enumerate(k_list):
-        print(f"Recall@{k}: {hits_sums[i] / total:.4f}")
-    print("="*30)
     
 
 if __name__ == "__main__":
