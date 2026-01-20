@@ -25,6 +25,7 @@ from tqdm import tqdm
 from transformers import TrainerCallback
 from torch.utils.data import Subset
 from functools import partial
+import math
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -81,107 +82,99 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=64,
-    top_k_list=[5],
-    print_random_example=True,  # new flag
+    max_new_tokens=8,
+    top_k_list=[1, 5, 10],
+    print_random_example=False,
 ):
     """
-    Batched sequence-level recall evaluation.
-
-    Args:
-        model: Hugging Face causal LM
-        tokenizer: Hugging Face tokenizer
-        eval_dataset: list of dicts with 'prompt' and 'target' fields
-        batch_size: number of prompts per batch
-        num_beams: number of beams for beam search
-        max_new_tokens: maximum tokens to generate
-        top_k_list: which recalls to compute (e.g., [1,5,10])
-
+    Batched sequence-level recall evaluation using beam search.
     Returns:
-        dict: {'recall_1': float, 'recall_5': float, ...}
+        local_hits: dict {k: hit_count}
+        local_total: int total number of examples processed by this rank
     """
     model.eval()
-    device = model.device
+    model = model.module if hasattr(model, "module") else model
+    # Pick device from the model's first parameter
+    device = next(model.parameters()).device
+    
+    # Store results as: {unique_hash: [hit_k1, hit_k2, ...]}
+    local_results = {}
 
-    local_hits = {k: 0 for k in top_k_list}
-    local_total = 0
-    printed = False  # track if we've printed already
     max_k = max(top_k_list)
+    num_return_sequences = max_k
 
-    # Process dataset in batches
+    printed = False
+
     for batch in tqdm(eval_loader, desc="Evaluating"):
+    # for batch in eval_loader:
         prompts = batch["prompt"]
         solutions = batch["solution"]
 
-        # Tokenize batch
+        # Tokenize → move to GPU
         inputs = tokenizer(
             prompts,
             return_tensors="pt",
             padding=True,
             truncation=True,
-        ).to(device)
-
-        batch_size = len(prompts)
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        input_seq_len = inputs["input_ids"].shape[1]
+        batch_size = len(prompts)
+        prompt_len = inputs["input_ids"].size(1)
 
-        # Generate sequences for the batch
-        gen_out = model.generate(
+        # Beam search
+        # outputs = model.module.generate(
+        outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, max_k),
-            num_return_sequences=max_k,
+            num_beams=max(num_beams, num_return_sequences),
+            num_return_sequences=num_return_sequences,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
-            return_dict_in_generate=True,
-            output_scores=True,
         )
 
-        sequences = gen_out.sequences
-        scores = gen_out.sequences_scores
+        # (batch, num_return_sequences, seq_len)
+        outputs = outputs.view(batch_size, num_return_sequences, -1)
 
-        # (batch, beams, seq_len)
-        sequences = sequences.view(batch_size, max_k, -1)
-        scores = scores.view(batch_size, max_k)
-
-        # Decode and compute top-k recall
+        # Loop over batch
         for i in range(batch_size):
-            # ---- Sort beams by descending score ----
-            order = torch.argsort(scores[i], descending=True)
-            sorted_seqs = sequences[i][order]
+            # --- CREATE UNIQUE ID ---
+            unique_id = solutions[i]["uid"]
 
-            sid = solutions[i]['sid']
             generations = [
                 tokenizer.decode(
-                    sorted_seqs[j, input_seq_len:],
-                    skip_special_tokens=True,
+                    outputs[i, k, prompt_len:],
+                    skip_special_tokens=True
                 )
-                for j in range(max_k)
+                for k in range(num_return_sequences)
             ]
 
-            # ---- Recall@k with short-circuit ----
-            for k in top_k_list:
-                hit = False
-                for j in range(k):
-                    if sid in generations[j]:
-                        hit = True
-                        break
-                local_hits[k] += int(hit)
+            # We want to find the RANK (1-based index) of the first correct answer.
+            is_correct = [solutions[i]["sid"] in g for g in generations]
 
-        # ---- Print one example ----
-        if print_random_example and not printed:
-            idx = random.randint(0, batch_size - 1)
-            print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[idx]}")
-            print(f"Solution:\n{solutions[idx]}")
-            for j in range(min(3, max_k)):
-                print(f"[Gen {j+1}] {generations[j]}")
-            print("========================\n")
-            printed = True
+            # 2. Find the first index that is True
+            if True in is_correct:
+                # .index(True) gives 0-based index. Add 1 for Rank.
+                # e.g., if index 0 is True, Rank is 1.
+                best_rank = is_correct.index(True) + 1
+            else:
+                # If the answer is not in any beam, rank is Infinity
+                best_rank = float('inf')
 
-        local_total += batch_size
+            # 3. Store the single integer (or float) value
+            local_results[unique_id] = best_rank
 
-    return local_hits, local_total
+            # ---- Print one example ----
+            if print_random_example and not printed:
+                print("\n=== Random Example ===")
+                print(f"Prompt:\n{prompts[i]}")
+                print(f"Solution:\n{solutions[i]}")
+                for j in range(min(3, max_k)):
+                    print(f"[Gen {j+1}] {generations[j]}")
+                print("========================\n")
+                printed = True
+
+    return local_results
 
 
 def no_processing_collator(batch):
@@ -241,48 +234,66 @@ class GenerateEvalCallback(TrainerCallback):
                     )
 
                 # ---- Custom generate-based eval ----
-                local_hits, local_total = self.eval_fn(
+                local_results = self.eval_fn(
                     self.trainer.model,
                     self.tokenizer,
                     eval_loader,
                 )
                 device = self.trainer.model.device
 
-                # ---- Prepare tensors ----
-                ks = sorted(local_hits.keys())  # ensure stable order
-                hits_tensor = torch.tensor(
-                    [local_hits[k] for k in ks],
-                    device=device,
-                    dtype=torch.long,
-                )
-                total_tensor = torch.tensor(
-                    [local_total],
-                    device=device,
-                    dtype=torch.long,
-                )
-
-                # ---- DDP reduce (SUM ONLY) ----
+                # 2. Gather & Deduplicate (The "Merge" Step)
                 if is_ddp:
-                    torch.distributed.all_reduce(hits_tensor, op=torch.distributed.ReduceOp.SUM)
-                    torch.distributed.all_reduce(total_tensor, op=torch.distributed.ReduceOp.SUM)
+                    world_size = torch.distributed.get_world_size()
+                    gathered_data = [None for _ in range(world_size)]
+                    # all_gather_object serializes the dict and sends it to all ranks
+                    torch.distributed.all_gather_object(gathered_data, local_results)
+                    
+                    # Merge dicts (Deduplication happens here automatically!)
+                    final_results = {}
+                    for rank_dict in gathered_data:
+                        final_results.update(rank_dict)
+                else:
+                    final_results = local_results
 
 
-                # ---- Compute recall@k (rank 0 only) ----
+                # 3. Compute Metrics (Rank 0 only)
                 if rank == 0:
-                    total = total_tensor.item()
-                    final_metrics = {
-                        f"eval/{dataset_name}_recall_{k}": hits_tensor[i].item() / max(total, 1)
-                        for i, k in enumerate(ks)
-                    }
-                    final_metrics["step"] = state.global_step
+                    total = len(final_results)
+                    ks = [1, 5, 10]  # Define your K values here
+                    metrics = {}
 
-                    # ---- Log ----
-                    self.trainer.log(final_metrics)
+                    if total > 0:
+                        # Extract all ranks
+                        all_ranks = list(final_results.values())
 
-                    print(
-                        f"\n[Custom eval @ step {state.global_step}] "
-                        f"{final_metrics}"
-                    )
+                        for k in ks:
+                            # --- Recall@k ---
+                            # Count how many items have a rank <= k
+                            hits = sum(1 for r in all_ranks if r <= k)
+                            metrics[f"eval/{dataset_name}_recall_{k}"] = hits / total
+
+                            # --- NDCG@k ---
+                            # Sum(1 / log2(rank + 1)) for ranks <= k
+                            dcg = sum(1.0 / math.log2(r + 1) for r in all_ranks if r <= k)
+                            
+                            # IDCG is ideal case: we assume 1 relevant item per query, so IDCG@k = 1.0
+                            # Thus NDCG = DCG / 1.0
+                            metrics[f"eval/{dataset_name}_ndcg_{k}"] = dcg / total
+                    else:
+                        # Handle empty dataset case
+                        for k in ks:
+                            metrics[f"eval/{dataset_name}_recall_{k}"] = 0.0
+                            metrics[f"eval/{dataset_name}_ndcg_{k}"] = 0.0
+
+                    metrics["step"] = state.global_step
+
+                    # 4. Log
+                    self.trainer.log(metrics)
+
+                    print(f"\n[Custom eval @ step {state.global_step}] (N={total})")
+                    for k, v in metrics.items():
+                        if "recall" in k or "ndcg" in k:
+                            print(f"  {k}: {v:.4f}")
 
             return control
 
@@ -313,7 +324,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=2000,
+        eval_steps=20000,
         optim="adamw_torch",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
         fp16=False,         # optional: if you want fp16 instead
@@ -414,18 +425,8 @@ def main():
 
     
     train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games"])
 
-    # train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Sports_and_Outdoors"])
-    # eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Beauty"])
-    # check_idx = 3
-    # print(eval_dataset[check_idx])
-    # print(tokenizer.decode(eval_dataset[check_idx]["input_ids"]))
-    # print(tokenizer.decode([x for x in eval_dataset[check_idx]["labels"] if x != -100]))
-
-    # eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
-    # print(eval_dataset[0])
-    
     gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
     # gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "grpo", ["Sports_and_Outdoors"])
     # gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
