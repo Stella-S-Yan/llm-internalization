@@ -209,9 +209,7 @@ def main(run_num):
     indices = sorted(indices)   # optional but recommended
     gen_eval_dataset = Subset(gen_eval_dataset, indices)
     print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
-    # eval_dataset = Subset(eval_dataset, range(32*8))
-    # for i in range(len(gen_eval_dataset)):
-    #     print(gen_eval_dataset[i]["solution"]["uid"])
+    print(gen_eval_dataset[10])
     
 
     sampler = None

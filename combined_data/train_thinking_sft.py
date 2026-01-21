@@ -13,6 +13,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
 
 import config
 import torch
+import torch.distributed as dist
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import argparse
@@ -84,7 +85,7 @@ def evaluate_sequence_recall(
     num_beams=20,
     max_new_tokens=8,
     top_k_list=[1, 5, 10],
-    print_random_example=False,
+    print_random_example=True,
 ):
     """
     Batched sequence-level recall evaluation using beam search.
@@ -149,19 +150,17 @@ def evaluate_sequence_recall(
                 for k in range(num_return_sequences)
             ]
 
-            # We want to find the RANK (1-based index) of the first correct answer.
-            is_correct = [solutions[i]["sid"] in g for g in generations]
+            # Check hits
+            hits = [solutions[i]["sid"] in g for g in generations]
 
-            # 2. Find the first index that is True
-            if True in is_correct:
-                # .index(True) gives 0-based index. Add 1 for Rank.
-                # e.g., if index 0 is True, Rank is 1.
-                best_rank = is_correct.index(True) + 1
+            # Find the first index where hit is True (1-based rank)
+            if True in hits:
+                # .index() returns 0-based index of first True
+                best_rank = hits.index(True) + 1 
             else:
-                # If the answer is not in any beam, rank is Infinity
-                best_rank = float('inf')
-
-            # 3. Store the single integer (or float) value
+                best_rank = float('inf') # Not found
+            
+            # Store the RANK, not the boolean list
             local_results[unique_id] = best_rank
 
             # ---- Print one example ----
@@ -173,6 +172,7 @@ def evaluate_sequence_recall(
                     print(f"[Gen {j+1}] {generations[j]}")
                 print("========================\n")
                 printed = True
+
 
     return local_results
 
@@ -238,15 +238,19 @@ class GenerateEvalCallback(TrainerCallback):
                     self.trainer.model,
                     self.tokenizer,
                     eval_loader,
+                    num_beams=20, 
+                    max_new_tokens=64,
+                    top_k_list=[1, 5, 10],
+                    print_random_example=False
                 )
                 device = self.trainer.model.device
 
                 # 2. Gather & Deduplicate (The "Merge" Step)
                 if is_ddp:
-                    world_size = torch.distributed.get_world_size()
+                    world_size = dist.get_world_size()
                     gathered_data = [None for _ in range(world_size)]
                     # all_gather_object serializes the dict and sends it to all ranks
-                    torch.distributed.all_gather_object(gathered_data, local_results)
+                    dist.all_gather_object(gathered_data, local_results)
                     
                     # Merge dicts (Deduplication happens here automatically!)
                     final_results = {}
@@ -324,7 +328,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=20000,
+        eval_steps=2000,
         optim="adamw_torch",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
         fp16=False,         # optional: if you want fp16 instead
@@ -428,25 +432,23 @@ def main():
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games"])
 
     gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
-    # gen_eval_dataset_2 = train_thinking.ReasoningDataset("eval", "grpo", ["Sports_and_Outdoors"])
-    # gen_eval_dataset_3 = train_thinking.ReasoningDataset("eval", "grpo", ["Beauty"])
     
     
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 5000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+    
+    indices = rng.sample(range(len(gen_eval_dataset_1)), GEN_EVAL_SUBSET_SIZE)
+    indices = sorted(indices)   # optional but recommended
+    gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
+    print(gen_eval_dataset_1[10])
+
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-    indices = rng.sample(range(len(gen_eval_dataset_1)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
-    # gen_eval_dataset_2 = Subset(gen_eval_dataset_2, indices)
-    # gen_eval_dataset_3 = Subset(gen_eval_dataset_3, indices)
-
-    print(gen_eval_dataset_1[10])
+   
 
     gen_eval_datasets = {
         "toys": gen_eval_dataset_1,
