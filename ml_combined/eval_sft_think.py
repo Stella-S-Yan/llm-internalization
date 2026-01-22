@@ -1,11 +1,7 @@
 """
 Evaluate SFT result that is trained on think data. Make sure metrics computation is valid in DDP setup.
-
 """
 
-# spawn creates a fresh Python process instead of forking.
-# Each worker safely initializes CUDA independently.
-# This is exactly what vLLM expects on multi-GPU setups.
 
 import multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
@@ -14,18 +10,13 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.nn.utils.rnn import pad_sequence
 
-# Needs to import vllm before torch
 from tqdm import tqdm
 import config
 from combined_data import train_thinking
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import re
-import random
 import os
 import argparse
-from torch.utils.data import Subset
 import math
 
 
