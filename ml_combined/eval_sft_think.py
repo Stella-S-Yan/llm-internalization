@@ -1,13 +1,5 @@
 """
-Evaluate SFT result that is trained on think data. 
-Use vLLM to speed up inference. Use vLLM as a python engine, so every gpu device do its
-own vllm-based inference and return local recall statistic. 
-Results from devices are aggregated and print out the final global recall@k
-
-vLLM does not work with DDP, so don't use torchrun
-vLLM is used as a python kernel, and one is initiated for each gpu. To launch the script
-$ python eval_think_sft.py
-
+Evaluate SFT result that is trained on think data. Make sure metrics computation is valid in DDP setup.
 
 """
 
