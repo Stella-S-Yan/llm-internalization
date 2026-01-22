@@ -187,7 +187,7 @@ class SampleSeqDataset(Dataset):
         self.sid_to_year = dict(zip(df['sid'], df['year']))
 
     def __len__(self):
-        return 2_000_000  # or any large number
+        return 3_000_000  # or any large number
 
     # def set_epoch(self, epoch):
         # random.seed(411 + epoch)

@@ -138,6 +138,7 @@ def process_batch(records_bytes):
             "year": target_year,
             "genre": target_genre,
             "sid": target_sid,
+            "uid": uid
         })
 
     # Batch Tokenization
