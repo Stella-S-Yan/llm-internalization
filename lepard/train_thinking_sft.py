@@ -26,11 +26,8 @@ import os
 import random
 import pandas as pd
 import re
-
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor"
-
+import torch.distributed as dist
+import reasoning_data
 
 
 class Params:
@@ -44,27 +41,9 @@ class Params:
     LORA_RATIO = 1
     WARMUP_STEPS = 1000    # 2k warmups is much better than 3K warmup
     ACC_STEP = 1
+    RUN_NUM=0
+    CHECK_POINT=0
 
-
-PROMPT_TEMPLATE = """
-<sft:think>
-<dcourt>  {dest_court} <dcourt>
-<ddate> {dest_date} </ddate>
-<dname> {dest_name} </dname>
-<dsid> {dest_formatted_sid} </dsid>
-
-quote:
-{target}
-"""
-
-TARGET_TEMPLATE = """
-<scourt>  {source_court} <scourt>
-<sdate> {source_date} </sdate>
-<sname> {source_name} </sname>
-<ssid> {quote_formatted_sid} </ssid>{eos}
-"""
-
-SID_PATTERN = re.compile(r"<ssid>(.*?)</")
 
 def load_checkpoint(base_model_name, save_dir):
     # Load BASE MODEL again — quantized or FP16 as desired
@@ -94,132 +73,6 @@ def load_checkpoint(base_model_name, save_dir):
     print(f"Restored model with extended vocab ({new_vocab_size} tokens)")
 
     return model, tokenizer
-
-
-class LepardDataset(Dataset):
-
-    def __init__(self, tokenizer, split, dataset_type="50k"):
-
-        self.tokenizer = tokenizer
-
-        if split == "train":
-            self.df = pd.read_parquet(config.LEPARD_50k_TRAIN)
-        elif split == "eval":
-            if dataset_type == "50k":
-                self.df = pd.read_parquet(config.LEPARD_50k_EVAL)
-            elif dataset_type == "20k": 
-                self.df = pd.read_parquet(config.LEPARD_20k_EVAL)
-            elif dataset_type == "10k":
-                self.df = pd.read_parquet(config.LEPARD_10k_EVAL)
-        elif split == "test":
-            if dataset_type == "50k":
-                self.df = pd.read_parquet(config.LEPARD_50k_TEST)
-            elif dataset_type == "20k": 
-                self.df = pd.read_parquet(config.LEPARD_20k_TEST)
-            elif dataset_type == "10k":
-                self.df = pd.read_parquet(config.LEPARD_10k_TEST)
-
-    def __len__(self):
-        return self.df.shape[0]
-    
-
-    def __getitem__(self, idx):
-        record = self.df.iloc[idx]
-
-        prompt_text = PROMPT_TEMPLATE.format(
-            dest_name=record["dest_name"],
-            dest_court=record["dest_court"],
-            dest_date=record["dest_date"],
-            dest_formatted_sid=record["dest_formatted_sid"],
-            target=""
-        ).strip()
-        
-        target_text = TARGET_TEMPLATE.format(
-            source_name=record["source_name"],
-            source_court=record["source_court"],
-            source_date=record["source_date"],
-            quote_formatted_sid=record["quote_formatted_sid"],
-            eos=self.tokenizer.eos_token
-        ).strip()
-
-        prompt_ids = self.tokenizer(
-            prompt_text,
-            add_special_tokens=False,
-            truncation=False,
-            padding=False
-        )["input_ids"]
-
-        target_ids= self.tokenizer(
-            target_text,
-            add_special_tokens=False
-        )["input_ids"]
-
-        input_ids = prompt_ids + target_ids
-
-        #  Mask loss on prompt, train on target + EOS
-        labels = [-100] * len(prompt_ids) + target_ids
-        
-        return {
-            "input_ids": torch.tensor(input_ids, dtype=torch.long),
-            "labels": torch.tensor(labels, dtype=torch.long),
-        }
-
-
-class LepardGenDataset(Dataset):
-
-    def __init__(self, split, dataset_type="50k"):
-
-        if split == "train":
-            self.df = pd.read_parquet(config.LEPARD_50k_TRAIN)
-        elif split == "eval":
-            if dataset_type == "50k":
-                self.df = pd.read_parquet(config.LEPARD_50k_EVAL)
-            elif dataset_type == "20k": 
-                self.df = pd.read_parquet(config.LEPARD_20k_EVAL)
-            elif dataset_type == "10k":
-                self.df = pd.read_parquet(config.LEPARD_10k_EVAL)
-        elif split == "test":
-            if dataset_type == "50k":
-                self.df = pd.read_parquet(config.LEPARD_50k_TEST)
-            elif dataset_type == "20k": 
-                self.df = pd.read_parquet(config.LEPARD_20k_TEST)
-            elif dataset_type == "10k":
-                self.df = pd.read_parquet(config.LEPARD_10k_TEST)
-
-
-    def __len__(self):
-        return self.df.shape[0]
-    
-
-    def __getitem__(self, idx):
-        record = self.df.iloc[idx]
-
-        prompt_text = PROMPT_TEMPLATE.format(
-            dest_cite=record["dest_cite"],
-            dest_name=record["dest_name"],
-            dest_court=record["dest_court"],
-            dest_date=record["dest_date"],
-            dest_formatted_sid=record["dest_formatted_sid"],
-            target=""
-        ).strip()
-        
-        target_text = TARGET_TEMPLATE.format(
-            source_cite=record["source_cite"],
-            source_name=record["source_name"],
-            source_court=record["source_court"],
-            source_date=record["source_date"],
-            quote_formatted_sid=record["quote_formatted_sid"],
-            eos="<|eot_id|>"
-        ).strip()
-
-        solution = record["quote_formatted_sid"]
-
-
-        return {
-            "prompt": prompt_text,
-            "target": target_text,
-            "solution": solution,
-        }
 
 
 def sft_data_collator(batch, tokenizer):
@@ -255,98 +108,105 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=128,
-    top_k_list=[1, 5],
-    print_random_example=True,  # new flag
+    max_new_tokens=8,
+    top_k_list=[1, 5, 10],
+    print_random_example=True,
 ):
     """
-    Batched sequence-level recall evaluation.
-
-    Args:
-        model: Hugging Face causal LM
-        tokenizer: Hugging Face tokenizer
-        eval_dataset: list of dicts with 'prompt' and 'target' fields
-        batch_size: number of prompts per batch
-        num_beams: number of beams for beam search
-        max_new_tokens: maximum tokens to generate
-        top_k_list: which recalls to compute (e.g., [1,5,10])
-
+    Batched sequence-level recall evaluation using beam search.
     Returns:
-        dict: {'recall_1': float, 'recall_5': float, ...}
+        local_hits: dict {k: hit_count}
+        local_total: int total number of examples processed by this rank
     """
     model.eval()
-    device = model.device
+    model = model.module if hasattr(model, "module") else model
+    # Pick device from the model's first parameter
+    device = next(model.parameters()).device
+    
+    # Store results as: {unique_hash: [hit_k1, hit_k2, ...]}
+    local_results = {}
 
-    # Initialize recall lists
-    recalls_dict = {k: [] for k in top_k_list}
-    printed = False  # track if we've printed already
+    max_k = max(top_k_list)
+    num_return_sequences = max_k
 
-    # Process dataset in batches
+    printed = False
+
     for batch in tqdm(eval_loader, desc="Evaluating"):
+    # for batch in eval_loader:
         prompts = batch["prompt"]
-        targets = batch["target"]
+        solutions = batch["solution"]
 
-        # Tokenize batch
+        # Tokenize → move to GPU
         inputs = tokenizer(
             prompts,
             return_tensors="pt",
             padding=True,
             truncation=True,
-        ).to(device)
-
-        batch_size = len(prompts)
-        max_k = max(top_k_list)
-
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        # Generate sequences for the batch
+        batch_size = len(prompts)
+        prompt_len = inputs["input_ids"].size(1)
+
+        # Beam search
+        # outputs = model.module.generate(
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            num_beams=max(num_beams, max(top_k_list)),
-            num_return_sequences=max(top_k_list),
+            num_beams=max(num_beams, num_return_sequences),
+            num_return_sequences=num_return_sequences,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
         )
 
-        # Reshape outputs: (batch_size, num_return_sequences, seq_len)
-        batch_outputs = outputs.view(batch_size, max(top_k_list), -1)
+        # (batch, num_return_sequences, seq_len)
+        outputs = outputs.view(batch_size, num_return_sequences, -1)
 
-        # Decode and compute top-k recall
+        # Loop over batch
         for i in range(batch_size):
-            prompt_len = inputs["input_ids"].size(1)
-            decoded_outputs = [
-                tokenizer.decode(batch_outputs[i, k, prompt_len:], skip_special_tokens=True)
-                for k in range(max_k)
+            # --- CREATE UNIQUE ID ---
+            unique_id = solutions[i]["row_id"]
+
+            generations = [
+                tokenizer.decode(
+                    outputs[i, k, prompt_len:],
+                    skip_special_tokens=True
+                )
+                for k in range(num_return_sequences)
             ]
-            # print(decoded_outputs)
-            match = SID_PATTERN.search(targets[i])
-            if match:
-                sid_value = match.group(1)
+
+            # Check hits
+            hits = [solutions[i]["sid"] in g for g in generations]
+
+            # Find the first index where hit is True (1-based rank)
+            if True in hits:
+                # .index() returns 0-based index of first True
+                best_rank = hits.index(True) + 1 
             else:
-                sid_value = "NONE"
+                best_rank = float('inf') # Not found
+            
+            # Store the RANK, not the boolean list
+            local_results[unique_id] = best_rank
 
-            hits = [1 if sid_value in o else 0 for o in decoded_outputs]
-            for k in top_k_list:
-                recalls_dict[k].append(int(any(hits[:k])))
-
-
-        # ---- Print one random batch example ----
-        if print_random_example and not printed:
-            rand_idx = random.randint(0, batch_size - 1)
-            print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[rand_idx]}")
-            print(f"Target:\n{targets[rand_idx]}")
-            for k, gen in enumerate(decoded_outputs[:5]):  # show top 5 generations
-                print(f"[Gen {k+1}] {gen}")
-            print("========================\n")
-            printed = True
-        # ----------------------------------------
-
-    # Compute mean recall
-    recalls_mean = {f"recall_{k}": float(np.mean(v)) for k, v in recalls_dict.items()}
-    return recalls_mean
+            # ---- Print one example ----
+            if print_random_example and not printed:
+                print("\n=== Random Example ===")
+                print(f"Prompt:\n{prompts[i]}")
+                print(f"Solution:\n{solutions[i]}")
+                for j in range(min(3, max_k)):
+                    print(f"[Gen {j+1}] {generations[j]}")
+                print("========================\n")
+                printed = True
 
 
+    return local_results
+
+
+def no_processing_collator(batch):
+    return {
+        "prompt": [x["prompt"] for x in batch],
+        "solution": [x["solution"] for x in batch]
+    }
 
 
 class GenerateEvalCallback(TrainerCallback):
@@ -384,9 +244,10 @@ class GenerateEvalCallback(TrainerCallback):
             eval_loader = DataLoader(
                 self.eval_dataset,
                 batch_size=self.batch_size,
+                num_workers=4,
                 sampler=sampler,
                 shuffle=False,
-                collate_fn=None,  # or your custom collate_fn
+                collate_fn=no_processing_collator,
             )
 
             # tqdm only on rank 0
@@ -397,57 +258,81 @@ class GenerateEvalCallback(TrainerCallback):
                 )
 
             # ---- Custom generate-based eval ----
-            metrics = self.eval_fn(
-                self.trainer.model,
-                self.tokenizer,
-                eval_loader,
-            )
-
-            # ---- DDP reduce (mean) ----
-            if is_ddp:
-                for k, v in metrics.items():
-                    tensor = torch.tensor(v, device=self.trainer.model.device)
-                    torch.distributed.all_reduce(
-                        tensor, op=torch.distributed.ReduceOp.SUM
-                    )
-                    metrics[k] = (tensor / world_size).item()
-
-            # ---- Prefix metrics for TensorBoard ----
-            metrics = {
-                f"eval/{k}": v
-                for k, v in metrics.items()
-            }
-            metrics["step"] = state.global_step
-
-            # ---- Log ----
-            self.trainer.log(metrics)
-
-            if rank == 0:
-                print(
-                    f"\n[Custom eval @ step {state.global_step}] "
-                    f"{metrics}"
+            local_results = self.eval_fn(
+                    self.trainer.model,
+                    self.tokenizer,
+                    eval_loader,
+                    num_beams=20, 
+                    max_new_tokens=64,
+                    top_k_list=[1, 5, 10],
+                    print_random_example=False
                 )
+            device = self.trainer.model.device
 
-        return control
+            # 2. Gather & Deduplicate (The "Merge" Step)
+            if is_ddp:
+                world_size = dist.get_world_size()
+                gathered_data = [None for _ in range(world_size)]
+                # all_gather_object serializes the dict and sends it to all ranks
+                dist.all_gather_object(gathered_data, local_results)
+                
+                # Merge dicts (Deduplication happens here automatically!)
+                final_results = {}
+                for rank_dict in gathered_data:
+                    final_results.update(rank_dict)
+            else:
+                final_results = local_results
 
 
-class SaveBestModelCallback(TrainerCallback):
-    def __init__(self):
-        self.best = float('inf')
-        
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        eval_loss = metrics.get("eval_loss")
-        if eval_loss is not None and eval_loss < self.best:
-            self.best = eval_loss
-            control.should_save = True  # save checkpoint this step
-        else:
-            control.should_save = False  # skip checkpoint
-        return control
+            # 3. Compute Metrics (Rank 0 only)
+            if rank == 0:
+                total = len(final_results)
+                ks = [1, 5, 10]  # Define your K values here
+                metrics = {}
+
+                if total > 0:
+                    # Extract all ranks
+                    all_ranks = list(final_results.values())
+
+                    for k in ks:
+                        # --- Recall@k ---
+                        # Count how many items have a rank <= k
+                        hits = sum(1 for r in all_ranks if r <= k)
+                        metrics[f"eval/recall_{k}"] = hits / total
+
+                        # --- NDCG@k ---
+                        # Sum(1 / log2(rank + 1)) for ranks <= k
+                        dcg = sum(1.0 / math.log2(r + 1) for r in all_ranks if r <= k)
+                        
+                        # IDCG is ideal case: we assume 1 relevant item per query, so IDCG@k = 1.0
+                        # Thus NDCG = DCG / 1.0
+                        metrics[f"eval/ndcg_{k}"] = dcg / total
+                else:
+                    # Handle empty dataset case
+                    for k in ks:
+                        metrics[f"eval/recall_{k}"] = 0.0
+                        metrics[f"eval/ndcg_{k}"] = 0.0
+
+                metrics["step"] = state.global_step
+
+                # 4. Log
+                self.trainer.log(metrics)
+
+                print(f"\n[Custom eval @ step {state.global_step}] (N={total})")
+                for k, v in metrics.items():
+                    if "recall" in k or "ndcg" in k:
+                        print(f"  {k}: {v:.4f}")
+
+            return control
+
 
 
 def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, params):
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
+
+    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
+    NUM_WORKERS = 1
 
     # --- Training arguments ---
     training_args = TrainingArguments(
@@ -463,10 +348,10 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         logging_steps=1000,
         save_strategy="steps",
         save_steps=2000,
-        save_total_limit=20,
+        save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=1000,
+        eval_steps=2000,
         optim="adamw_torch",
         bf16=True,          # enable bfloat16 (H100 optimized)
         fp16=False,         
@@ -522,8 +407,11 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     # )
     # trainer.add_callback(callback)
 
-    # trainer.train()
-    trainer.train(resume_from_checkpoint="/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor/checkpoint-424000")
+    if params.CHECK_POINT == 0:
+        trainer.train()
+    else:
+        print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
+        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor_{params.RUN_NUM}/checkpoint-{params.CHECK_POINT}")
 
 
 def main():
@@ -538,6 +426,8 @@ def main():
     parser.add_argument("--WEIGHT_DECAY", type=float, default=0.01, help="L2 regularization")
     parser.add_argument("--LORA_DROPOUT", type=float, default=0.2, help="LoRA dropout rate")
     parser.add_argument("--ACC_STEP", type=int, default=1, help="Gradient accumulate steps")
+    parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
+    parser.add_argument("--CHECK_POINT", type=int, default=0, help="Checkpoint number")
 
     
 
@@ -564,15 +454,15 @@ def main():
     old_vocab_size = 128_256
     print(tokenizer.eos_token)
     
-    train_dataset = LepardDataset(tokenizer, "train", dataset_type="50k")
-    eval_dataset = LepardDataset(tokenizer, "eval", dataset_type="50k")  
+    train_dataset = reasoning_data.LepardDataset('sft', tokenizer, "train", dataset_type="50k")
+    eval_dataset = reasoning_data.LepardDataset('sft', tokenizer, "eval", dataset_type="50k")  
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-    gen_eval_dataset = LepardGenDataset("eval", dataset_type="50k")
+    # gen_eval_dataset = reasoning_data.LepardDataset('grpo', "eval", dataset_type="50k")
 
-    print(train_dataset[0])
-    print(tokenizer.decode([x for x in train_dataset[0]["labels"] if x != -100]))
-    print(gen_eval_dataset[0])
+    # print(train_dataset[0])
+    # print(tokenizer.decode([x for x in train_dataset[0]["labels"] if x != -100]))
+    # print(gen_eval_dataset[0])
 
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 1000
@@ -580,9 +470,9 @@ def main():
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
-    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    # gen_eval_dataset = Subset(gen_eval_dataset, indices)
 
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
+    train(model, tokenizer, train_dataset, eval_dataset, None, Params)
     
 
 if __name__ == "__main__":

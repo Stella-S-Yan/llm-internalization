@@ -1,19 +1,7 @@
 """
-Evaluate SFT result that is trained on think data. 
-Use vLLM to speed up inference. Use vLLM as a python engine, so every gpu device do its
-own vllm-based inference and return local recall statistic. 
-Results from devices are aggregated and print out the final global recall@k
-
-vLLM does not work with DDP, so don't use torchrun
-vLLM is used as a python kernel, and one is initiated for each gpu. To launch the script
-$ python eval_think_sft.py
-
-
+Evaluate SFT result that is trained on think data. Make sure metrics computation is valid in DDP setup.
 """
 
-# spawn creates a fresh Python process instead of forking.
-# Each worker safely initializes CUDA independently.
-# This is exactly what vLLM expects on multi-GPU setups.
 
 import multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
@@ -22,7 +10,6 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.nn.utils.rnn import pad_sequence
 import argparse
 
 # Needs to import vllm before torch
@@ -30,9 +17,10 @@ from tqdm import tqdm
 import config
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
-import random
 import os
 import train_thinking_sft
+import reasoning_data
+import math
 
 
 SID_PATTERN = re.compile(r"<ssid>(.*?)</")
@@ -70,9 +58,8 @@ def evaluate_sequence_recall(
     # Pick device from the model's first parameter
     device = next(model.parameters()).device
     
-    # We now store only raw hits, not full lists
-    local_hits = {k: 0 for k in top_k_list}
-    local_total = 0
+    # Store results as: {unique_id: [hit_k1, hit_k2, ...]}
+    local_results = {}
 
     max_k = max(top_k_list)
     num_return_sequences = max_k
@@ -80,6 +67,7 @@ def evaluate_sequence_recall(
     printed = False
 
     for batch in tqdm(eval_loader, desc="Evaluating"):
+    # for batch in eval_loader:
         prompts = batch["prompt"]
         solutions = batch["solution"]
 
@@ -92,7 +80,6 @@ def evaluate_sequence_recall(
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-
         batch_size = len(prompts)
         prompt_len = inputs["input_ids"].size(1)
 
@@ -112,6 +99,9 @@ def evaluate_sequence_recall(
 
         # Loop over batch
         for i in range(batch_size):
+            # --- CREATE UNIQUE ID ---
+            unique_id = solutions[i]["row_id"]
+
             generations = [
                 tokenizer.decode(
                     outputs[i, k, prompt_len:],
@@ -120,27 +110,32 @@ def evaluate_sequence_recall(
                 for k in range(num_return_sequences)
             ]
 
-            # All levels
-            hits = [solutions[i] in g for g in generations]
+            # Check hits
+            hits = [solutions[i]["ssid"] in g for g in generations]
 
-            for k in top_k_list:
-                # if any of the first k generations hits
-                local_hits[k] += int(any(hits[:k]))
+            # Find the first index where hit is True (1-based rank)
+            if True in hits:
+                # .index() returns 0-based index of first True
+                best_rank = hits.index(True) + 1 
+            else:
+                best_rank = float('inf') # Not found
+            
+            # Store the RANK, not the boolean list
+            local_results[unique_id] = best_rank
 
-        # Print only once
-        if print_random_example and not printed:
-            idx = random.randint(0, batch_size - 1)
-            print("\n=== Random Example ===")
-            print(f"Prompt:\n{prompts[idx]}")
-            print(f"Solution:\n{solutions[idx]}")
-            for k in range(min(5, num_return_sequences)):
-                print(f"[Gen {k+1}] {generations[k]}")
-            print("========================\n")
-            printed = True
+            # ---- Print one example ----
+            if print_random_example and not printed:
+                print("\n=== Random Example ===")
+                print(f"Prompt:\n{prompts[i]}")
+                print(f"Solution:\n{solutions[i]}")
+                for j in range(min(3, max_k)):
+                    print(f"[Gen {j+1}] {generations[j]}")
+                print("========================\n")
+                printed = True
 
-        local_total += batch_size
 
-    return local_hits, local_total
+    return local_results
+
 
 def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
@@ -187,63 +182,85 @@ def main():
   
     # --- Prepare dataset ---
     print(f"---- Eval on {Params.DATA_TYPE} dataset ----")
-    gen_eval_dataset = train_thinking_sft.LepardGenDataset("test", dataset_type=Params.DATA_TYPE)
+    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "test", dataset_type=Params.DATA_TYPE)
+    
     print(f"Eval on : {len(gen_eval_dataset)} data points.")
     # eval_dataset = Subset(eval_dataset, range(32*8))
     print(gen_eval_dataset[0])
 
     
-    if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-        rank = torch.distributed.get_rank()
-        # print("Rank: ", rank)
+    sampler = None
+    if dist.is_initialized():
+        # shuffle=False is critical for reproducibility, though the hash handles dedup regardless
         sampler = DistributedSampler(gen_eval_dataset, shuffle=False)
-    else:
-        rank = 0
-        sampler = None
-
-
-    batch_size = 64   # 64 may be too large for beam search
-
 
     eval_loader = DataLoader(
         gen_eval_dataset,
-        batch_size=batch_size,
+        batch_size=16,
         sampler=sampler,
         shuffle=False,
         collate_fn=collate_fn
     )
 
-
-    local_hits, local_total = evaluate_sequence_recall(
+    # 4. Run Evaluation
+    # Returns: { "hash123": [1, 1, 1], "hash456": [0, 1, 1] ... }
+    local_results = evaluate_sequence_recall(
         model=model,
         tokenizer=tokenizer,
         eval_loader=eval_loader,
         num_beams=20,
-        max_new_tokens=128,
+        max_new_tokens=64,
         top_k_list=[1, 5, 10],
+        print_random_example=False
     )
+    # print(f"---- {local_rank}: {local_results}")
 
-    # -----------------------------
-    # Aggregate across ranks
-    # -----------------------------
-    device = next(model.parameters()).device
-
-    hits_tensor = torch.tensor([local_hits[k] for k in [1,5,10]], device=device, dtype=torch.float32)
-    total_tensor = torch.tensor([local_total], device=device, dtype=torch.float32)
-
+    # 5. Gather & Deduplicate
     if dist.is_initialized():
-        dist.all_reduce(hits_tensor, op=dist.ReduceOp.SUM)
-        dist.all_reduce(total_tensor, op=dist.ReduceOp.SUM)
+        world_size = dist.get_world_size()
+        gathered_results = [None for _ in range(world_size)]
+        
+        # Collect dicts from all GPUs
+        dist.all_gather_object(gathered_results, local_results)
+        
+        # Merge dicts (Deduplication happens here automatically!)
+        final_results = {}
+        for rank_dict in gathered_results:
+            final_results.update(rank_dict)
+    else:
+        final_results = local_results
 
-    # -----------------------------
-    # Compute global recall
-    # -----------------------------
-    if not dist.is_initialized() or dist.get_rank() == 0:
-        global_recalls = {
-            f"recall_{k}": (hits_tensor[i] / total_tensor.item()).item()
-            for i, k in enumerate([1,5,10])
-        }
-        print(global_recalls)
+    # 3. Compute Metrics (Rank 0 only)
+    if local_rank == 0:
+        total = len(final_results)
+        print(f"----- Total data count: {total}")
+        ks = [1, 5, 10]  # Define your K values here
+        metrics = {}
+
+        if total > 0:
+            # Extract all ranks
+            all_ranks = list(final_results.values())
+
+            for k in ks:
+                # --- Recall@k ---
+                # Count how many items have a rank <= k
+                hits = sum(1 for r in all_ranks if r <= k)
+                metrics[f"recall_{k}"] = hits / total
+
+                # --- NDCG@k ---
+                # Sum(1 / log2(rank + 1)) for ranks <= k
+                dcg = sum(1.0 / math.log2(r + 1) for r in all_ranks if r <= k)
+                
+                # IDCG is ideal case: we assume 1 relevant item per query, so IDCG@k = 1.0
+                # Thus NDCG = DCG / 1.0
+                metrics[f"eval/ndcg_{k}"] = dcg / total
+        else:
+            # Handle empty dataset case
+            for k in ks:
+                metrics[f"eval/recall_{k}"] = 0.0
+                metrics[f"eval/ndcg_{k}"] = 0.0
+
+        print(metrics)
 
 
 
