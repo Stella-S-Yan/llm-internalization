@@ -36,7 +36,6 @@ TARGET_TEMPLATE = """
 <ssid> {quote_formatted_sid} </ssid>{eos}
 """
 
-SID_PATTERN = re.compile(r"<ssid>(.*?)</")
 
 def load_checkpoint(base_model_name, save_dir):
     # Load BASE MODEL again — quantized or FP16 as desired
@@ -90,6 +89,7 @@ class LepardDataset(Dataset):
                 self.df = pd.read_parquet(config.LEPARD_20k_TEST)
             elif dataset_type == "10k":
                 self.df = pd.read_parquet(config.LEPARD_10k_TEST)
+
 
     def __len__(self):
         return self.df.shape[0]
@@ -154,13 +154,4 @@ class LepardDataset(Dataset):
                 f"Invalid datatype '{self.datatype}'. "
                 f"Expected one of: ['sft', 'grpo']"
             )
-
-        # return {
-        #     "prompt": prompt_text,
-        #     "target": target_text,
-        #     "input_ids": input_ids,
-        #     "labels": labels,
-        #     "solution": solution
-        # }
-
 

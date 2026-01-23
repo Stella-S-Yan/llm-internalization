@@ -21,6 +21,7 @@ import os
 import train_thinking_sft
 import reasoning_data
 import math
+from torch.utils.data import Subset
 
 
 SID_PATTERN = re.compile(r"<ssid>(.*?)</")
@@ -152,25 +153,16 @@ class Params:
     DATA_TYPE = "10k"
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Training configuration")
-
-    parser.add_argument("--DATA_TYPE", type=str, default="20k", help="Lepard evaluation datatype")
-
-    args = parser.parse_args()
-
-    for key, value in vars(args).items():
-        setattr(Params, key, value)
+def main(run_num, data_type):
     
     local_rank, device = ddp_init()
     
     # --- assign devices via vLLM ---
-    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_merged_think_sft_model"
+    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_merged_think_sft_model_{run_num}"
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
         dtype=torch.bfloat16,
-        # dtype=torch.float32,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     tokenizer.padding_side='left'
@@ -181,8 +173,9 @@ def main():
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
   
     # --- Prepare dataset ---
-    print(f"---- Eval on {Params.DATA_TYPE} dataset ----")
-    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "test", dataset_type=Params.DATA_TYPE)
+    print(f"---- Eval on {data_type} dataset ----")
+    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "test", dataset_type=data_type)
+    # gen_eval_dataset = Subset(gen_eval_dataset, range(500))
     
     print(f"Eval on : {len(gen_eval_dataset)} data points.")
     # eval_dataset = Subset(eval_dataset, range(32*8))
@@ -209,7 +202,7 @@ def main():
         tokenizer=tokenizer,
         eval_loader=eval_loader,
         num_beams=20,
-        max_new_tokens=64,
+        max_new_tokens=128,
         top_k_list=[1, 5, 10],
         print_random_example=False
     )
@@ -265,4 +258,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 1. Create parser
+    parser = argparse.ArgumentParser(description="Example script with parameters")
+
+    # 2. Add arguments
+    parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
+    parser.add_argument("--DATA_TYPE", type=str, default="20k", help="Lepard evaluation datatype")
+
+    # 3. Parse arguments
+    args = parser.parse_args()
+
+    main(args.RUN_NUM, args.DATA_TYPE)

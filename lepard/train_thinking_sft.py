@@ -13,21 +13,18 @@ import random
 import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from transformers import TrainerCallback
-import numpy as np
-import bagz
 from tqdm import tqdm
 from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 from torch.utils.data import Subset
 import os
 import random
-import pandas as pd
-import re
 import torch.distributed as dist
 import reasoning_data
+import math
 
 
 class Params:
@@ -108,7 +105,7 @@ def evaluate_sequence_recall(
     tokenizer,
     eval_loader,
     num_beams=20,
-    max_new_tokens=8,
+    max_new_tokens=128,
     top_k_list=[1, 5, 10],
     print_random_example=True,
 ):
@@ -263,7 +260,7 @@ class GenerateEvalCallback(TrainerCallback):
                     self.tokenizer,
                     eval_loader,
                     num_beams=20, 
-                    max_new_tokens=64,
+                    max_new_tokens=128,
                     top_k_list=[1, 5, 10],
                     print_random_example=False
                 )
@@ -332,7 +329,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(vars(Params))
 
     MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
-    NUM_WORKERS = 1
+    NUM_WORKERS = 4
 
     # --- Training arguments ---
     training_args = TrainingArguments(
@@ -345,7 +342,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         weight_decay=params.WEIGHT_DECAY,
         warmup_steps=params.WARMUP_STEPS,      # warm up for 1000 steps
         lr_scheduler_type="cosine",
-        logging_steps=1000,
+        logging_steps=2000,
         save_strategy="steps",
         save_steps=2000,
         save_total_limit=10,
@@ -356,7 +353,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         bf16=True,          # enable bfloat16 (H100 optimized)
         fp16=False,         
         report_to="tensorboard",
-        ddp_find_unused_parameters=False
+        ddp_find_unused_parameters=False,
+        dataloader_num_workers=NUM_WORKERS,
     )
     
     
@@ -395,17 +393,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         data_collator=lambda batch: sft_data_collator(batch, tokenizer),  # use custom collator
     )
 
-    # callback = SaveBestModelCallback()
-    # trainer.add_callback(callback)
-
-    # callback = GenerateEvalCallback(
-    #     trainer=trainer,
-    #     eval_dataset=gen_eval_dataset,
-    #     tokenizer=tokenizer,
-    #     eval_fn=evaluate_sequence_recall,
-    #     eval_steps=1000
-    # )
-    # trainer.add_callback(callback)
+    callback = GenerateEvalCallback(
+        trainer=trainer,
+        eval_dataset=gen_eval_dataset,
+        tokenizer=tokenizer,
+        eval_fn=evaluate_sequence_recall,
+        eval_steps=2000
+    )
+    trainer.add_callback(callback)
 
     if params.CHECK_POINT == 0:
         trainer.train()
@@ -456,23 +451,21 @@ def main():
     
     train_dataset = reasoning_data.LepardDataset('sft', tokenizer, "train", dataset_type="50k")
     eval_dataset = reasoning_data.LepardDataset('sft', tokenizer, "eval", dataset_type="50k")  
-    print(f"---Eval dataset size: {len(eval_dataset)}")
-
-    # gen_eval_dataset = reasoning_data.LepardDataset('grpo', "eval", dataset_type="50k")
-
-    # print(train_dataset[0])
-    # print(tokenizer.decode([x for x in train_dataset[0]["labels"] if x != -100]))
-    # print(gen_eval_dataset[0])
+    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "eval", dataset_type="50k")
 
     SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 1000
-    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-    indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    rng = random.Random(SEED)   
+
+    indices = rng.sample(range(len(eval_dataset)), 1000)
+    indices = sorted(indices)   # optional but recommended
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+
+    indices = rng.sample(range(len(eval_dataset)), 5000)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
-    # gen_eval_dataset = Subset(gen_eval_dataset, indices)
-
-    train(model, tokenizer, train_dataset, eval_dataset, None, Params)
+    print(f"---Eval dataset size: {len(eval_dataset)}")
+    
+    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
     
 
 if __name__ == "__main__":

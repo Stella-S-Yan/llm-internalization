@@ -57,10 +57,18 @@ cols = [
 ]
 # 20k data
 df2 = pd.read_csv(config.DATA_DIR / config.DATA_SOURCE / "top_20000_data.csv")
+# drop duplicate rows
+df2 = df2.drop_duplicates()
+assert df2.shape[0] == 2_693_279
 df_20k = df.merge(df2[cols], on=cols, how="inner")
+assert df_20k["row_id"].is_unique == True
 split_sets(df_20k, dataset_type="20k")
 
+# 10k data
 df2 = pd.read_csv(config.DATA_DIR / config.DATA_SOURCE / "top_10000_data.csv")
+df2 = df2.drop_duplicates()
+assert df2.shape[0] == 2_075_121
 df_10k = df.merge(df2[cols], on=cols, how="inner")
+assert df_10k["row_id"].is_unique == True
 split_sets(df_10k, dataset_type="10k")
 
