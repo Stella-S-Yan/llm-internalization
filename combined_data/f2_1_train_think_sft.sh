@@ -18,58 +18,59 @@ echo "$CHECK_POINT"
 case $GPU_INDEX in
   # 0.038
   0)
-    params="--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
             --TRAIN_BATCH_SIZE 32 --ACC_STEP 2 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
-            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;
   # 0.042
   1)
     params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
-            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 0.038
-  2)
-    params="--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
             --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
-            --LORA_RANK 16 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
-            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
+            --TOTAL_STEPS 250000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;
-  # 8e-4 blow up
-  3)
+  # 1024 batch
+  2)
     params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
             --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
             --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  # 128 batch
+  3)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 32 --ACC_STEP 4 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
+            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;
   # 0.040
   4)
-    params="--LR 4e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
-            --LORA_RANK 16 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
-            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  5) 
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 4 --ACC_STEP 8 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
-            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 0.034. lora_rank=8 is bad
-  6) 
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
-            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 0.030 
-  7)
     params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
             --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
-            --LORA_RANK 8 --LORA_RATIO 1 --LORA_DROPOUT 0.25 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  # try to reproduce the best result
+  5) 
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
             --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  # try even smaller batch
+  6) 
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 4 --ACC_STEP 1 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
+            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  # try larger batch 
+  7)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 8 --ACC_STEP 1 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;
   *)
     echo "Unsupported GPU index: $GPU_INDEX"

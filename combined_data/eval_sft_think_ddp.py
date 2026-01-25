@@ -201,16 +201,17 @@ def main(run_num):
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
   
     # --- Prepare dataset ---
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
-    SEED = 411
-    GEN_EVAL_SUBSET_SIZE = 5000
-    rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset = Subset(gen_eval_dataset, indices)
-    print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
-    print(gen_eval_dataset[10])
+    # gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
+    # SEED = 411
+    # GEN_EVAL_SUBSET_SIZE = 5000
+    # rng = random.Random(SEED)   # <- LOCAL RNG (important!)
+    # indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
+    # indices = sorted(indices)   # optional but recommended
+    # gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    # print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
+    # print(gen_eval_dataset[10])
     
+    gen_eval_dataset = train_thinking.ReasoningDataset("test", "grpo", [config.REVIEW_TYPE])
 
     sampler = None
     if dist.is_initialized():
