@@ -13,7 +13,7 @@ MODEL_DIR = DATA_DIR / "model"
 RUN_DIR = DATA_DIR / "runs"
 
 DATA_SOURCE = "MovieLens"
-REVIEW_TYPE = "1m"
+REVIEW_TYPE = "20m"
 
 # DATA_SOURCE = "Lepard"
 # REVIEW_TYPE = "one"
@@ -24,10 +24,16 @@ REVIEW_TYPE = "1m"
 time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
 
-MOVIELES_REVEIW_DATASET = os.path.join(DATA_DIR, "MovieLens", "ml-1m", "ratings.dat")
-MOVIELES_USERS_DATASET = os.path.join(DATA_DIR, "MovieLens", "ml-1m", "users.dat")
-MOVIELES_MOVIES_DATASET = os.path.join(DATA_DIR, "MovieLens", "ml-1m", "movies.dat")
+file_map = {
+    '1m': ('ratings.dat', 'movies.dat'),
+    '20m': ('ratings.csv', 'movies.csv'),
+}
 
+base_dir = os.path.join(DATA_DIR, "MovieLens", f"ml-{REVIEW_TYPE}")
+ratings_file, movies_file = file_map[REVIEW_TYPE]
+
+MOVIELES_REVEIW_DATASET = os.path.join(base_dir, ratings_file)
+MOVIELES_MOVIES_DATASET = os.path.join(base_dir, movies_file)
 
 AMAZON_REVIEW_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"reviews_{REVIEW_TYPE}_5.json") 
 AMAZON_META_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"meta_{REVIEW_TYPE}.json")
@@ -95,5 +101,10 @@ ML_TEST = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_50k_tes
 META_W_TEXT = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_text_meta_df.bagz")
 RQVAE_CHECKPOINT_DIR= os.path.join(MODEL_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_rqvae")
 TRAIN_LOSS_PLOT = os.path.join(MODEL_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_rqvae_train.png")
-MAX_HISTORY_LEN = 20  # Amazon, MovieLens
-MIN_HISTORY_LEN = 2
+
+if DATA_SOURCE == 'Amazon':
+    MAX_HISTORY_LEN = 20  # Amazon
+    MIN_HISTORY_LEN = 2
+elif DATA_SOURCE == 'MovieLens':
+    MAX_HISTORY_LEN = 30  # MovieLens
+    MIN_HISTORY_LEN = 2
