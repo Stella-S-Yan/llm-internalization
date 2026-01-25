@@ -7,20 +7,12 @@ from utils import bagz_utils
 import random
 
 
-
-def format_sid(seq):
-    prefixes = ["A", "B", "C", "D"]
-    return [f"{p}{n}" for p, n in zip(prefixes, seq)]
-
-
 class GenFixedData():
     def __init__(self):
         self.train_eval_data = []
         self.train_data = []
         self.eval_data = []
         self.test_data = []
-        # self.max_encoder_seq_len = config.MAX_HISTORY_LEN * 4 + 1
-        # self.max_decoder_seq_len = 1 * 4   
 
         self.max_len = 0
 
@@ -41,7 +33,7 @@ class GenFixedData():
         sid_seq = record["sequence"]
 
         # Test
-        sid_seq = sid_seq[-config.MAX_HISTORY_LEN:]
+        sid_seq = sid_seq[-config.MAX_HISTORY_LEN-1:]
         input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.test_data.append( {
                 "uid": uid,
@@ -52,7 +44,7 @@ class GenFixedData():
 
         # Eval
         sid_seq = record["sequence"][:-1]
-        sid_seq = sid_seq[-config.MAX_HISTORY_LEN+1:]
+        sid_seq = sid_seq[-config.MAX_HISTORY_LEN-1:]
         input_seq_d, target_seq_d = self._make_data_point(sid_seq)
         self.eval_data.append( {
                 "uid": uid,
@@ -67,19 +59,11 @@ class GenFixedData():
         sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_data.extend(sub_sequences)
 
-        # Train + eval
-        sid_seq = record["sequence"][:-1]
-        sub_seqs = self._get_subsequence(sid_seq)
-        sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
-        self.train_eval_data.extend(sub_sequences)
-
         return
 
 
     def _save_data(self):
         rng = random.Random(411)
-        rng.shuffle(self.train_eval_data)
-        bagz_utils.save_record(self.train_eval_data, config.TRAIN_EVAL_DATA)
         rng.shuffle(self.train_data)
         bagz_utils.save_record(self.train_data, config.TRAIN_DATA)
         rng.shuffle(self.eval_data)

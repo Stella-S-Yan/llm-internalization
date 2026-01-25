@@ -209,32 +209,31 @@ class GenerateEvalCallback(TrainerCallback):
             rank = torch.distributed.get_rank() if is_ddp else 0
             world_size = torch.distributed.get_world_size() if is_ddp else 1
 
-            for dataset_name, eval_dataset in self.eval_dataset.items():
-                # ---- Sampler (per dataset) ----
-                sampler = (
-                    DistributedSampler(eval_dataset, shuffle=False)
-                    if is_ddp
-                    else None
+            # ---- Sampler (per dataset) ----
+            sampler = (
+                DistributedSampler(self.eval_dataset, shuffle=False)
+                if is_ddp
+                else None
+            )
+
+            eval_loader = DataLoader(
+                self.eval_dataset,
+                batch_size=self.batch_size,
+                num_workers=4,
+                sampler=sampler,
+                shuffle=False,
+                collate_fn=no_processing_collator,
+            )
+
+            # tqdm only on rank 0
+            if rank == 0:
+                eval_loader = tqdm(
+                    eval_loader,
+                    desc=f"Eval @ step {state.global_step}",
                 )
 
-                eval_loader = DataLoader(
-                    eval_dataset,
-                    batch_size=self.batch_size,
-                    num_workers=4,
-                    sampler=sampler,
-                    shuffle=False,
-                    collate_fn=no_processing_collator,
-                )
-
-                # tqdm only on rank 0
-                if rank == 0:
-                    eval_loader = tqdm(
-                        eval_loader,
-                        desc=f"Eval @ step {state.global_step}",
-                    )
-
-                # ---- Custom generate-based eval ----
-                local_results = self.eval_fn(
+            # ---- Custom generate-based eval ----
+            local_results = self.eval_fn(
                     self.trainer.model,
                     self.tokenizer,
                     eval_loader,
@@ -243,61 +242,61 @@ class GenerateEvalCallback(TrainerCallback):
                     top_k_list=[1, 5, 10],
                     print_random_example=False
                 )
-                device = self.trainer.model.device
+            device = self.trainer.model.device
 
-                # 2. Gather & Deduplicate (The "Merge" Step)
-                if is_ddp:
-                    world_size = dist.get_world_size()
-                    gathered_data = [None for _ in range(world_size)]
-                    # all_gather_object serializes the dict and sends it to all ranks
-                    dist.all_gather_object(gathered_data, local_results)
-                    
-                    # Merge dicts (Deduplication happens here automatically!)
-                    final_results = {}
-                    for rank_dict in gathered_data:
-                        final_results.update(rank_dict)
+            # 2. Gather & Deduplicate (The "Merge" Step)
+            if is_ddp:
+                world_size = dist.get_world_size()
+                gathered_data = [None for _ in range(world_size)]
+                # all_gather_object serializes the dict and sends it to all ranks
+                dist.all_gather_object(gathered_data, local_results)
+                
+                # Merge dicts (Deduplication happens here automatically!)
+                final_results = {}
+                for rank_dict in gathered_data:
+                    final_results.update(rank_dict)
+            else:
+                final_results = local_results
+
+
+            # 3. Compute Metrics (Rank 0 only)
+            if rank == 0:
+                total = len(final_results)
+                ks = [1, 5, 10]  # Define your K values here
+                metrics = {}
+
+                if total > 0:
+                    # Extract all ranks
+                    all_ranks = list(final_results.values())
+
+                    for k in ks:
+                        # --- Recall@k ---
+                        # Count how many items have a rank <= k
+                        hits = sum(1 for r in all_ranks if r <= k)
+                        metrics[f"eval/recall_{k}"] = hits / total
+
+                        # --- NDCG@k ---
+                        # Sum(1 / log2(rank + 1)) for ranks <= k
+                        dcg = sum(1.0 / math.log2(r + 1) for r in all_ranks if r <= k)
+                        
+                        # IDCG is ideal case: we assume 1 relevant item per query, so IDCG@k = 1.0
+                        # Thus NDCG = DCG / 1.0
+                        metrics[f"eval/ndcg_{k}"] = dcg / total
                 else:
-                    final_results = local_results
+                    # Handle empty dataset case
+                    for k in ks:
+                        metrics[f"eval/recall_{k}"] = 0.0
+                        metrics[f"eval/ndcg_{k}"] = 0.0
 
+                metrics["step"] = state.global_step
 
-                # 3. Compute Metrics (Rank 0 only)
-                if rank == 0:
-                    total = len(final_results)
-                    ks = [1, 5, 10]  # Define your K values here
-                    metrics = {}
+                # 4. Log
+                self.trainer.log(metrics)
 
-                    if total > 0:
-                        # Extract all ranks
-                        all_ranks = list(final_results.values())
-
-                        for k in ks:
-                            # --- Recall@k ---
-                            # Count how many items have a rank <= k
-                            hits = sum(1 for r in all_ranks if r <= k)
-                            metrics[f"eval/{dataset_name}_recall_{k}"] = hits / total
-
-                            # --- NDCG@k ---
-                            # Sum(1 / log2(rank + 1)) for ranks <= k
-                            dcg = sum(1.0 / math.log2(r + 1) for r in all_ranks if r <= k)
-                            
-                            # IDCG is ideal case: we assume 1 relevant item per query, so IDCG@k = 1.0
-                            # Thus NDCG = DCG / 1.0
-                            metrics[f"eval/{dataset_name}_ndcg_{k}"] = dcg / total
-                    else:
-                        # Handle empty dataset case
-                        for k in ks:
-                            metrics[f"eval/{dataset_name}_recall_{k}"] = 0.0
-                            metrics[f"eval/{dataset_name}_ndcg_{k}"] = 0.0
-
-                    metrics["step"] = state.global_step
-
-                    # 4. Log
-                    self.trainer.log(metrics)
-
-                    print(f"\n[Custom eval @ step {state.global_step}] (N={total})")
-                    for k, v in metrics.items():
-                        if "recall" in k or "ndcg" in k:
-                            print(f"  {k}: {v:.4f}")
+                print(f"\n[Custom eval @ step {state.global_step}] (N={total})")
+                for k, v in metrics.items():
+                    if "recall" in k or "ndcg" in k:
+                        print(f"  {k}: {v:.4f}")
 
             return control
 
@@ -306,14 +305,14 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
+    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
     NUM_WORKERS = 1
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_{params.ADAPTOR_SAVE_DIR}_{params.RUN_NUM}",
+        output_dir=MODEL_SAVE_DIR,
         logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
-        per_device_eval_batch_size=16,
         gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
         learning_rate=params.LR,   # base LR passed to Trainer, overridden by our custom groups
@@ -323,7 +322,6 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         logging_steps=2000,
         save_strategy="steps",
         save_steps=2000,
-        metric_for_best_model="eval_loss",
         greater_is_better=False,
         save_total_limit=10,
         load_best_model_at_end=False,
@@ -336,7 +334,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         ddp_find_unused_parameters=False,
         dataloader_num_workers=NUM_WORKERS,
         dataloader_persistent_workers=True,
-        dataloader_pin_memory=True
+        dataloader_pin_memory=True,
+        remove_unused_columns=False
     )
     
     
@@ -389,7 +388,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         trainer.train()
     else:
         print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
-        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_Combined_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
+        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
 
 
 def main():
@@ -426,40 +425,27 @@ def main():
     model, tokenizer = load_checkpoint(base_model_name, save_dir) 
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
-
+    print(tokenizer.eos_token)
     
     train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
     eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games"])
-
-    gen_eval_dataset_1 = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
-    
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
     
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 5000
     rng = random.Random(SEED)   # <- LOCAL RNG (important!)
     
-    indices = rng.sample(range(len(gen_eval_dataset_1)), GEN_EVAL_SUBSET_SIZE)
+    indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
-    gen_eval_dataset_1 = Subset(gen_eval_dataset_1, indices)
-    print(gen_eval_dataset_1[10])
+    gen_eval_dataset = Subset(gen_eval_dataset, indices)
+    print(f"---Eval gen dataset size: {len(eval_dataset)}")
 
     indices = rng.sample(range(len(eval_dataset)), GEN_EVAL_SUBSET_SIZE)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")
 
-   
-
-    gen_eval_datasets = {
-        "toys": gen_eval_dataset_1,
-        # "sports": gen_eval_dataset_2,
-        # "beauty": gen_eval_dataset_3
-    }
-
-    print(f"---Gen Eval dataset size: {len(eval_dataset)}")
-
-    
-    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_datasets, Params)
+    train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, Params)
 
     
 if __name__ == "__main__":

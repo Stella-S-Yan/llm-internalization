@@ -52,8 +52,6 @@ def do_the_work(tokenizer, split):
         data_reader = bagz.Reader(config.EVAL_DATA)
     elif split == "test":
         data_reader = bagz.Reader(config.TEST_DATA)
-    elif split == "train_eval":
-        data_reader = bagz.Reader(config.TRAIN_EVAL_DATA)
     
 
     all_data = []
@@ -148,7 +146,6 @@ def main():
     do_the_work(tokenizer, "train")
     do_the_work(tokenizer, "eval")
     do_the_work(tokenizer, "test")
-    # do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":
     main()
