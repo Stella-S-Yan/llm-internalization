@@ -24,8 +24,6 @@ import math
 from torch.utils.data import Subset
 
 
-SID_PATTERN = re.compile(r"<ssid>(.*?)</")
-
 def ddp_init():
     if "RANK" in os.environ:
         dist.init_process_group(backend="nccl")
