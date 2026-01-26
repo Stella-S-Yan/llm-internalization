@@ -173,7 +173,7 @@ def evaluate_sequence_recall(
             ]
 
             # Check hits
-            hits = [solutions[i]["sid"] in g for g in generations]
+            hits = [solutions[i]["ssid"] in g for g in generations]
 
             # Find the first index where hit is True (1-based rank)
             if True in hits:
