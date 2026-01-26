@@ -59,11 +59,19 @@ class GenFixedData():
         sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_data.extend(sub_sequences)
 
+        # Train + eval
+        sid_seq = record["sequence"][:-1]
+        sub_seqs = self._get_subsequence(sid_seq)
+        sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
+        self.train_eval_data.extend(sub_sequences)
+
         return
 
 
     def _save_data(self):
         rng = random.Random(411)
+        rng.shuffle(self.train_eval_data)
+        bagz_utils.save_record(self.train_eval_data, config.TRAIN_EVAL_DATA)
         rng.shuffle(self.train_data)
         bagz_utils.save_record(self.train_data, config.TRAIN_DATA)
         rng.shuffle(self.eval_data)

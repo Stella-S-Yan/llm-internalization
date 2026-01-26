@@ -12,14 +12,14 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed_data"
 MODEL_DIR = DATA_DIR / "model"
 RUN_DIR = DATA_DIR / "runs"
 
-DATA_SOURCE = "MovieLens"
-REVIEW_TYPE = "20m"
+# DATA_SOURCE = "MovieLens"
+# REVIEW_TYPE = "1m"
 
 # DATA_SOURCE = "Lepard"
 # REVIEW_TYPE = "one"
 
-# DATA_SOURCE = "Amazon"
-# REVIEW_TYPE = "Toys_and_Games"  # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
+DATA_SOURCE = "Amazon"
+REVIEW_TYPE = "Sports_and_Outdoors" # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
 
 time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)

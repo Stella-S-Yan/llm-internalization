@@ -17,7 +17,7 @@ embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_align
 
 def main(checkpoint_step, run_num):
 
-    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_think_sft_adaptor_{run_num}" / f"checkpoint-{checkpoint_step}"
+    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{run_num}" / f"checkpoint-{checkpoint_step}"
 
     # Load BASE MODEL again — quantized or FP16 as desired
     model = AutoModelForCausalLM.from_pretrained(

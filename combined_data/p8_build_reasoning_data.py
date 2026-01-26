@@ -52,6 +52,8 @@ def do_the_work(tokenizer, split):
         data_reader = bagz.Reader(config.EVAL_DATA)
     elif split == "test":
         data_reader = bagz.Reader(config.TEST_DATA)
+    elif split == "train_eval":
+        data_reader = bagz.Reader(config.TRAIN_EVAL_DATA)
     
 
     all_data = []
@@ -143,9 +145,10 @@ def main():
     model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
-    do_the_work(tokenizer, "train")
-    do_the_work(tokenizer, "eval")
-    do_the_work(tokenizer, "test")
+    # do_the_work(tokenizer, "train")
+    # do_the_work(tokenizer, "eval")
+    # do_the_work(tokenizer, "test")
+    do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":
     main()
