@@ -59,7 +59,7 @@ POLY_END_LR = 1e-6  # better than 1e-6 for Toys_and_Games
 
 
 # Create an informative run name
-RUN_NAME = f"scheduler{SCHEDULE}_endlr_{POLY_END_LR}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_combined"
+RUN_NAME = f"scheduler{SCHEDULE}_endlr_{POLY_END_LR}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}_all"
 
 
 def load_model_tokenizer(run_test: False):
@@ -111,8 +111,7 @@ class SIDDataset(Dataset):
         print("--- Use all items in meta_df. ")
 
         self.data = []
-        review_types = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
-        # review_types = ["Toys_and_Games"]
+        review_types = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty", "Home_and_Kitchen", "Musical_Instruments", "Pet_Supplies"]
 
         for review_type in review_types:
             meta_df_path = os.path.join(

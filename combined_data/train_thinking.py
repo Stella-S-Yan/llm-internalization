@@ -30,14 +30,12 @@ class ReasoningDataset(Dataset):
 
         self.data = []
         for src in sources:
-            if split == "train" and  (src == "Sports_and_Outdoors" or src == "Beauty"):
-                split = "train_eval"
             data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_think_data_{split}.bagz')
             self.data.extend(bagz_utils.read_record(data_path))
 
         # === CRITICAL FIX: FORCE DETERMINISTIC ORDER ===
         # DDP requires self.data to be identical (index-for-index) on every GPU.
-        # self.data.sort(key=lambda x: x["solution"]["uid"])
+        self.data.sort(key=lambda x: str(x["prompt"]))
 
 
     def __len__(self):
@@ -48,8 +46,6 @@ class ReasoningDataset(Dataset):
         record = self.data[idx]
         if self.datatype == "sft":
             return {
-                # "input_ids": record["input_ids"],
-                # "labels": record["labels"],
                 "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
                 "labels": torch.tensor(record["labels"], dtype=torch.long)
             }

@@ -19,21 +19,21 @@ RUN_DIR = DATA_DIR / "runs"
 # REVIEW_TYPE = "one"
 
 DATA_SOURCE = "Amazon"
-REVIEW_TYPE = "Sports_and_Outdoors" # 2 "Sports_and_Outdoors"  1 "Toys_and_Games"  3 "Beauty"
+REVIEW_TYPE = "Pet_Supplies" #   1 "Toys_and_Games" 2 "Sports_and_Outdoors" 3 "Beauty" 4 "Home_and_Kitchen"  5 "Musical_Instruments"  6 "Pet_Supplies"
 
-time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
+# time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+# LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
 
-file_map = {
-    '1m': ('ratings.dat', 'movies.dat'),
-    '20m': ('ratings.csv', 'movies.csv'),
-}
+# file_map = {
+#     '1m': ('ratings.dat', 'movies.dat'),
+#     '20m': ('ratings.csv', 'movies.csv'),
+# }
 
-base_dir = os.path.join(DATA_DIR, "MovieLens", f"ml-{REVIEW_TYPE}")
-ratings_file, movies_file = file_map[REVIEW_TYPE]
+# base_dir = os.path.join(DATA_DIR, "MovieLens", f"ml-{REVIEW_TYPE}")
+# ratings_file, movies_file = file_map[REVIEW_TYPE]
 
-MOVIELES_REVEIW_DATASET = os.path.join(base_dir, ratings_file)
-MOVIELES_MOVIES_DATASET = os.path.join(base_dir, movies_file)
+# MOVIELES_REVEIW_DATASET = os.path.join(base_dir, ratings_file)
+# MOVIELES_MOVIES_DATASET = os.path.join(base_dir, movies_file)
 
 AMAZON_REVIEW_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"reviews_{REVIEW_TYPE}_5.json") 
 AMAZON_META_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"meta_{REVIEW_TYPE}.json")

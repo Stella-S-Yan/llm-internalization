@@ -70,12 +70,7 @@ def _process_df(model, meta_df, save_file_name):
 def gen_sid():
     model = _restore_model()
 
-    all_df = []
-    for group_id in range(8):
-        meta_df = bagz_utils.read_parquet(f"{config.META_TWO_EMB}_{group_id}")
-        all_df.append(meta_df)
-        
-    all_df = pd.concat(all_df, ignore_index=True)
+    all_df = bagz_utils.read_parquet(config.META_TWO_EMB)
 
     # Mark if in review_df
     review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)

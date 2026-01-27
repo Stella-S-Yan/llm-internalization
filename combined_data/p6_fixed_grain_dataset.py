@@ -9,12 +9,11 @@ import random
 
 class GenFixedData():
     def __init__(self):
-        self.train_eval_data = []
+        # self.train_eval_data = []
         self.train_data = []
-        self.eval_data = []
+        # self.eval_data = []
         self.test_data = []
 
-        self.max_len = 0
 
     def gen_data(self):
         records = bagz_utils.read_record(config.USER_SEQUENCE)
@@ -24,7 +23,6 @@ class GenFixedData():
 
         self._save_data()
 
-        print(self.max_len)
 
 
     def _process_one_record(self, record):
@@ -42,40 +40,41 @@ class GenFixedData():
                 }
         )
 
-        # Eval
-        sid_seq = record["sequence"][:-1]
-        sid_seq = sid_seq[-config.MAX_HISTORY_LEN-1:]
-        input_seq_d, target_seq_d = self._make_data_point(sid_seq)
-        self.eval_data.append( {
-                "uid": uid,
-                "input": input_seq_d,
-                "target": target_seq_d,
-                }
-        )
+        # # Eval
+        # sid_seq = record["sequence"][:-1]
+        # sid_seq = sid_seq[-config.MAX_HISTORY_LEN-1:]
+        # input_seq_d, target_seq_d = self._make_data_point(sid_seq)
+        # self.eval_data.append( {
+        #         "uid": uid,
+        #         "input": input_seq_d,
+        #         "target": target_seq_d,
+        #         }
+        # )
 
         # Train
-        sid_seq = record["sequence"][:-2]
+        # sid_seq = record["sequence"][:-2]
+        sid_seq = record["sequence"][:-1]
         sub_seqs = self._get_subsequence(sid_seq)
         sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_data.extend(sub_sequences)
 
-        # Train + eval
-        sid_seq = record["sequence"][:-1]
-        sub_seqs = self._get_subsequence(sid_seq)
-        sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
-        self.train_eval_data.extend(sub_sequences)
+        # # Train + eval
+        # sid_seq = record["sequence"][:-1]
+        # sub_seqs = self._get_subsequence(sid_seq)
+        # sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
+        # self.train_eval_data.extend(sub_sequences)
 
         return
 
 
     def _save_data(self):
         rng = random.Random(411)
-        rng.shuffle(self.train_eval_data)
-        bagz_utils.save_record(self.train_eval_data, config.TRAIN_EVAL_DATA)
+        # rng.shuffle(self.train_eval_data)
+        # bagz_utils.save_record(self.train_eval_data, config.TRAIN_EVAL_DATA)
         rng.shuffle(self.train_data)
         bagz_utils.save_record(self.train_data, config.TRAIN_DATA)
-        rng.shuffle(self.eval_data)
-        bagz_utils.save_record(self.eval_data, config.EVAL_DATA)
+        # rng.shuffle(self.eval_data)
+        # bagz_utils.save_record(self.eval_data, config.EVAL_DATA)
         rng.shuffle(self.test_data)
         bagz_utils.save_record(self.test_data, config.TEST_DATA)
     

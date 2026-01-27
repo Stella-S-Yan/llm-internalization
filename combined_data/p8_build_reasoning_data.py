@@ -71,6 +71,12 @@ def do_the_work(tokenizer, split):
             uid = f"T_{uid}"
         elif config.REVIEW_TYPE == "Sports_and_Outdoors":
             uid = f"S_{uid}"
+        elif config.REVIEW_TYPE == "Home_and_Kitchen":
+            uid = f"H_{uid}"
+        elif config.REVIEW_TYPE == "Musical_Instruments":
+            uid = f"M_{uid}"
+        elif config.REVIEW_TYPE == "Pet_Supplies":
+            uid = f"P_{uid}"
 
         # sids = [x.strip() for x in history.split(";")]
         sids = re.findall(PATTERN, history)
@@ -145,10 +151,10 @@ def main():
     model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
-    # do_the_work(tokenizer, "train")
+    do_the_work(tokenizer, "train")
     # do_the_work(tokenizer, "eval")
-    # do_the_work(tokenizer, "test")
-    do_the_work(tokenizer, "train_eval")
+    do_the_work(tokenizer, "test")
+    # do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":
     main()

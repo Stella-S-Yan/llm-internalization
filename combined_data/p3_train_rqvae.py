@@ -20,7 +20,6 @@ import config
 import tensorflow as tf
 from utils import bagz_utils
 import os
-import faiss
 
 from absl import logging as absl_logging
 absl_logging.set_verbosity(absl_logging.ERROR)
@@ -80,19 +79,13 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
 
 
 def get_data():
-    sources = [ "Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
+    sources = [ "Toys_and_Games", "Sports_and_Outdoors", "Beauty", "Home_and_Kitchen", "Musical_Instruments", "Pet_Supplies"]
 
     raw_item_embeddings = []
     for data_source in sources:
         print(f"--- Loading {data_source} data...")
         meta_data_path = os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{data_source}_meta_two_emb_df.bagz")
-
-        df_all = []
-        for group_id in range(8):
-            print(f"get file {meta_data_path}_{group_id}")
-            df = bagz_utils.read_parquet(f"{meta_data_path}_{group_id}")
-            df_all.append(df)
-        meta_df = pd.concat(df_all, ignore_index=True)
+        meta_df = bagz_utils.read_parquet(meta_data_path)
         print("meta_df shape: ", meta_df.shape)
         
         review_data_path = os.path.join(config.DATA_DIR, config.DATA_SOURCE, f"reviews_{data_source}_5.json") 

@@ -6,7 +6,8 @@ Generate product embeddings with llama
 $ python llama_embedding.py
 """
 
-
+import os
+import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import pandas as pd
@@ -145,6 +146,37 @@ def gen_embedding():
     for p in procs:
         p.join()
 
+    print("All processes finished. Combining files...")
+    combined_dfs = []
+    temp_files = []
+
+    # 1. Read all the split files back in
+    for gpu_id in range(n_gpus):
+        temp_fname = f"{config.META_TWO_EMB}_{gpu_id}"
+        try:
+            # Read using your util
+            df_part = bagz_utils.read_parquet(temp_fname)
+            combined_dfs.append(df_part)
+            temp_files.append(temp_fname)
+        except Exception as e:
+            print(f"Error reading chunk {gpu_id}: {e}")
+
+    # 2. Concatenate and Save
+    if combined_dfs:
+        full_df = pd.concat(combined_dfs, ignore_index=True)
+        
+        # Save to the final destination (using the original variable without suffix)
+        bagz_utils.save_parquet(full_df, config.META_TWO_EMB)
+        print(f"Combined file saved to {config.META_TWO_EMB}")
+
+        # 3. Delete temporary files
+        for f in temp_files:
+            # Check if file exists exactly as named
+            if os.path.exists(f):
+                os.remove(f)
+            # Check if bagz_utils added a .parquet extension automatically
+            elif os.path.exists(f + ".parquet"):
+                os.remove(f + ".parquet")
     
 
 if __name__=="__main__":
