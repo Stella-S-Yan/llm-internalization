@@ -152,7 +152,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
     do_the_work(tokenizer, "train")
-    # do_the_work(tokenizer, "eval")
+    do_the_work(tokenizer, "eval")
     do_the_work(tokenizer, "test")
     # do_the_work(tokenizer, "train_eval")
 

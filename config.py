@@ -19,7 +19,7 @@ RUN_DIR = DATA_DIR / "runs"
 # REVIEW_TYPE = "one"
 
 DATA_SOURCE = "Amazon"
-REVIEW_TYPE = "Pet_Supplies" #   1 "Toys_and_Games" 2 "Sports_and_Outdoors" 3 "Beauty" 4 "Home_and_Kitchen"  5 "Musical_Instruments"  6 "Pet_Supplies"
+REVIEW_TYPE = "Beauty" #   1 "Toys_and_Games" 2 "Sports_and_Outdoors" 3 "Beauty" 4 "Home_and_Kitchen"  5 "Musical_Instruments"  6 "Pet_Supplies"
 
 # time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 # LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
@@ -103,7 +103,7 @@ RQVAE_CHECKPOINT_DIR= os.path.join(MODEL_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_rqva
 TRAIN_LOSS_PLOT = os.path.join(MODEL_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_rqvae_train.png")
 
 if DATA_SOURCE == 'Amazon':
-    MAX_HISTORY_LEN = 20  # Amazon
+    MAX_HISTORY_LEN = 50  # Amazon
     MIN_HISTORY_LEN = 2
 elif DATA_SOURCE == 'MovieLens':
     MAX_HISTORY_LEN = 30  # MovieLens

@@ -427,9 +427,9 @@ def main():
     old_vocab_size = 128_256
     print(tokenizer.eos_token)
     
-    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty",  "Home_and_Kitchen", "Musical_Instruments", "Pet_Supplies"])
-    eval_dataset = train_thinking.ReasoningDataset("test", "sft", ["Toys_and_Games"])
-    gen_eval_dataset = train_thinking.ReasoningDataset("test", "grpo", ["Toys_and_Games"])
+    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games", "Sports_and_Outdoors", "Beauty"])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games"])
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
     
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 5000
