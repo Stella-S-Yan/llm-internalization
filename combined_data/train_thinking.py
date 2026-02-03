@@ -75,6 +75,59 @@ class ReasoningDataset(Dataset):
                 f"Invalid datatype '{self.datatype}'. "
                 f"Expected one of: ['sft', 'grpo', 'raw_text', 'raw_text_vllm']"
             )
+
+
+class ReasoningDatasetFair(Dataset):
+    def __init__(self, split, datatype: str, sources):
+        self.datatype = datatype
+
+        self.data = []
+        for src in sources:
+            data_path = os.path.join(config.PROCESSED_DATA_DIR / f'{config.DATA_SOURCE}_{src}_fair_think_data_{split}.bagz')
+            self.data.extend(bagz_utils.read_record(data_path))
+
+        # === CRITICAL FIX: FORCE DETERMINISTIC ORDER ===
+        # DDP requires self.data to be identical (index-for-index) on every GPU.
+        self.data.sort(key=lambda x: str(x["prompt"]))
+
+
+    def __len__(self):
+        return len(self.data)
+    
+
+    def __getitem__(self, idx):
+        record = self.data[idx]
+        if self.datatype == "sft":
+            return {
+                "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
+                "labels": torch.tensor(record["labels"], dtype=torch.long)
+            }
+        elif self.datatype == "grpo":
+            return {
+                "prompt": record["prompt"],
+                "solution": record["solution"],
+            }
+        elif self.datatype == "raw_text_vllm":  # used for vLLM-based thinking_sft model evaluation
+            return {
+                "prompt": {"prompt": record["prompt"], "prompt_token_ids": record["prompt_token_ids"].tolist()},
+                "target": record["target"],
+                "solution": record["solution"],
+            }
+        elif self.datatype == "raw_text":
+            return {
+                "prompt_token_ids": record["prompt_token_ids"],
+                "target": record["target"],
+            }
+        elif self.datatype == "gen_eval":
+            return {
+                "gen_prompt": record["prompt"],
+                "gen_target": record["target"]
+            }
+        else:
+            raise ValueError(
+                f"Invalid datatype '{self.datatype}'. "
+                f"Expected one of: ['sft', 'grpo', 'raw_text', 'raw_text_vllm']"
+            )
         
 
 def gen_eval_collator(batch):

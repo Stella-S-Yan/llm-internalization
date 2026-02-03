@@ -13,11 +13,13 @@ import argparse
 
 
 base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
-embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+# embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 
 def main(checkpoint_step, run_num):
 
-    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{run_num}" / f"checkpoint-{checkpoint_step}"
+    # think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{run_num}" / f"checkpoint-{checkpoint_step}"
+    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{run_num}" / f"checkpoint-{checkpoint_step}"
 
     # Load BASE MODEL again — quantized or FP16 as desired
     model = AutoModelForCausalLM.from_pretrained(

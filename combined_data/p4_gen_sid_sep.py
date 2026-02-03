@@ -30,8 +30,8 @@ def append_prefix_sid(seq):
 
 def _restore_model():
     # Load model checkpoint
-    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_Combined_all_rqvae"))
-    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_Combined_all_rqvae')}")
+    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae"))
+    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae')}")
     return model
 
 
@@ -70,8 +70,15 @@ def _process_df(model, meta_df, save_file_name):
 def gen_sid():
     model = _restore_model()
 
-    all_df = bagz_utils.read_parquet(config.META_TWO_EMB)
-    
+    emb_df = bagz_utils.read_parquet(config.META_TWO_EMB)
+    all_df = bagz_utils.read_parquet(config.META_NORMALIZED)    # with all rows including those with duplicate formatted_text
+
+    all_df = all_df.merge(
+        emb_df[['formatted_text', 'gte_embed', 'llama_embedding']],
+        on='formatted_text',
+        how='left'
+    )
+
     # Mark if in review_df
     review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)
     num_users = review_df["reviewerID"].nunique()

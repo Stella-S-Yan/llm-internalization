@@ -16,47 +16,42 @@ echo "$CHECK_POINT"
 
 # Select parameters based on GPU index
 case $GPU_INDEX in
-  # 0.038
   0)
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 2 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
-            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 0.042
-  1)
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
-            --TOTAL_STEPS 250000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 1024 batch
-  2)
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
-            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 128 batch
-  3)
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 4 \
-            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
-            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
-    ;;
-  # 0.040
-  4)
     params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
             --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
             --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
             --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;
-  # try to reproduce the best result
-  5) 
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
+  1)
+    params="--LR 1e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 2 \
             --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
-            --TOTAL_STEPS 100000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  2)
+    params="--LR 1e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 2 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  3)
+    params="--LR 2e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 4 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  4)
+    params="--LR 3e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 4 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
+    ;;
+  
+  5) 
+    params="--LR 1e-4 --WEIGHT_DECAY 0.01 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 16 --ACC_STEP 8 \
+            --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.25 \
+            --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;
   # try even smaller batch
   6) 

@@ -14,7 +14,7 @@ def gen_embedding(meta_df):
     logger = logging.getLogger(__name__)
 
     # Restrict to a single GPU
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "5"
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load tokenizer and model
@@ -67,6 +67,7 @@ def gen_embedding(meta_df):
 
 def do_the_work():
     meta_df = bagz_utils.read_parquet(config.META_NORMALIZED)
+    meta_df = meta_df.drop_duplicates(subset=["formatted_text"])
     gen_embedding(meta_df)
 
 

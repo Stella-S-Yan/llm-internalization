@@ -108,10 +108,14 @@ class GenFixedData():
         target = seq[-1]
         input = seq[:-1]
 
-        input_seq_str = ' '.join(
-            item if isinstance(item, str) else ' '.join(item)
-            for item in input
-        )
+        try:
+            input_seq_str = ' '.join(
+                item if isinstance(item, str) else ' '.join(item)
+                for item in input
+            )
+        except Exception as e:
+            print(f"Error processing sequence {seq}: {e}")
+            return None, None
 
         return input_seq_str, target
 
