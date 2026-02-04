@@ -136,10 +136,11 @@ def gen_embedding():
     df = bagz_utils.read_parquet(config.META_OUTSIDE_EMB)
 
     n_gpus = torch.cuda.device_count()
-    splits = np.array_split(df, n_gpus)
-
+    chunk_size = math.ceil(len(df) / n_gpus)
+    df_splits = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]
+    
     procs = []
-    for gpu_id, df_split in enumerate(splits):
+    for gpu_id, df_split in enumerate(df_splits):
         p = Process(target=run_on_gpu, args=(gpu_id, df_split))
         p.start()
         procs.append(p)

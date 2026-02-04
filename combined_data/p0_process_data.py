@@ -4,12 +4,15 @@ Generate product embeddings using SentenceBert.
 $ python sbert_embedding.py
 """
 
+
 import pandas as pd
 import logging
 import config
 from utils import bagz_utils
 import ast
 import numpy as np
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +91,12 @@ def normalize_meta_data():
     meta_df.loc[mask_xml, 'description'] = ""
     print(f"--- Filtered {mask_xml.sum()} items with bad xml descriptions. Set description to empty string.")
 
-    # Mark if the item is in review set
+    # Drop rows that are not being reviewed
     review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)
     num_users = review_df["reviewerID"].nunique()
     print(f"---Users: {num_users}")
-    meta_df["has_review"] = meta_df["asin"].isin(review_df["asin"]).astype(int)
+
+    meta_df = meta_df[meta_df["asin"].isin(review_df["asin"])].reset_index(drop=True)
 
     # Mark description length
     meta_df['desc_length'] = meta_df['description'].str.len()

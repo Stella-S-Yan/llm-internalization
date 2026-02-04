@@ -39,7 +39,7 @@ def gen_embedding(meta_df):
     embeddings = model.encode(
         sentences=meta_df["formatted_text"].tolist(),
         pool=pool,                # Triggers multi-GPU parallel workers
-        batch_size=1024,          # High batch size for 80GB A100
+        batch_size=2048,          # High batch size for b200
         chunk_size=50000,         # Large chunks for high-throughput distribution
         normalize_embeddings=True, # L2 normalization for cosine similarity
         show_progress_bar=True
@@ -61,7 +61,7 @@ def do_the_work():
     meta_df = meta_df.drop_duplicates(subset=["formatted_text"]).reset_index(drop=True)
     
     # Hardware/RAM Logging
-    ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+    ram_gb = psutil.virtual_memory().total / (2048 ** 3)
     logger.info(f"System RAM: {ram_gb:.2f} GB | CPU Cores: {multiprocessing.cpu_count()}")
     
     gen_embedding(meta_df)
