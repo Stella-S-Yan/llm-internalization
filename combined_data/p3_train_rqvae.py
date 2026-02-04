@@ -79,7 +79,23 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
 
 
 def get_data():
-    sources = [ "Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
+    sources = [ 
+        "Automotive",
+        "Baby",
+        "Beauty", 
+        "Cell_Phones_and_Accessories",
+        "Clothing_Shoes_and_Jewelry", 
+        "Grocery_and_Gourmet_Food",
+        "Health_and_Personal_Care",
+        "Home_and_Kitchen",
+        "Musical_Instruments",
+        "Office_Products",
+        "Patio_Lawn_and_Garden",
+        "Pet_Supplies",
+        "Sports_and_Outdoors",
+        "Tools_and_Home_Improvement",
+        "Toys_and_Games" 
+               ]
 
     raw_item_embeddings = []
     for data_source in sources:
@@ -102,14 +118,15 @@ def get_data():
         # ]
         # print(f"--- Original rows: {meta_df.shape[0]}, after filtering bad description + title: {df.shape[0]}")
 
+        df = meta_df.copy()
         # keep only unique embeddings to train rqvae
-        df = df.drop_duplicates(subset=["formatted_text"])
+        # df = df.drop_duplicates(subset=["formatted_text"])
         print(f"--- After dropping duplicate embeddings: {df.shape[0]}")
 
-        raw_item_embeddings.extend(df["gte_embed"])
+        raw_item_embeddings.extend(df["t5_embed"])
 
     
-    print(f"Total items for RQVAE training: {len(raw_item_embeddings)}")    # 42,382 vs. 908,396
+    print(f"Total items for RQVAE training: {len(raw_item_embeddings)}")  
     # Ensure all arrays are writable
     raw_item_embeddings = [np.array(emb, dtype=np.float32, copy=True) for emb in raw_item_embeddings]
 
@@ -172,7 +189,7 @@ def train():
     rngs = nnx.Rngs(params=0, ema=1)
 
     model = rqvae.RQVAE(
-        input_dim=1024,
+        input_dim=768,
         encoder_layer_dims=[512, 256, 128],
         output_dim=hp["vqvae"]["embedding_dim"],
         decoder_layer_dims=[128, 256, 512],
@@ -230,7 +247,7 @@ def train():
         train_quantization_loss.append(quantization_loss)
         train_usage_ratios.append(usage_ratio)
         
-        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.99:
+        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.9:
         # if loss < best_loss:
             checkpointing.save_checkpoint(
                 checkpoint_dir=checkpoint_dir,
