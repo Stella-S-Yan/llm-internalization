@@ -15,11 +15,11 @@ RUN_DIR = DATA_DIR / "runs"
 # DATA_SOURCE = "MovieLens"
 # REVIEW_TYPE = "1m"
 
-# DATA_SOURCE = "Lepard"
-# REVIEW_TYPE = "one"
+DATA_SOURCE = "Lepard"
+REVIEW_TYPE = "20k"
 
-DATA_SOURCE = "Amazon"
-REVIEW_TYPE = "Beauty" #   1 "Toys_and_Games" 2 "Sports_and_Outdoors" 3 "Beauty" 4 "Home_and_Kitchen"  5 "Musical_Instruments"  6 "Pet_Supplies"
+# DATA_SOURCE = "Amazon"
+# REVIEW_TYPE = "Beauty" #   1 "Toys_and_Games" 2 "Sports_and_Outdoors" 3 "Beauty" 4 "Home_and_Kitchen"  5 "Musical_Instruments"  6 "Pet_Supplies"
 
 # time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 # LOG_DIR = os.path.join(BASE_DIR, "data", "tensorboard", time_str)
@@ -75,6 +75,10 @@ LEPARD_QUOTE_DF = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}
 LEPARD_OUTSIDE_EMB = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_outside_emb")
 LEPARD_LLM_EMB = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_llm_emb")
 LEPARD_SID = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_sid_df.parquet")
+
+LEPARD_TRAIN = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_train_df.parquet")
+LEPARD_EVAL = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_eval_df.parquet")
+LEPARD_TEST = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_test_df.parquet")
 
 LEPARD_50k_TRAIN = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_50k_train_df.parquet")
 LEPARD_50k_EVAL = os.path.join(PROCESSED_DATA_DIR, f"{DATA_SOURCE}_{REVIEW_TYPE}_50k_eval_df.parquet")
