@@ -28,9 +28,10 @@ def run_preprocessing():
         
         movies_1m_file = os.path.join(config.DATA_DIR, config.DATA_SOURCE, f'ml-{config.REVIEW_TYPE}', 'movies.dat')
         movies_1m_df = pd.read_csv(movies_1m_file, sep='::', names=movies_column_names, engine='python', header=None, encoding='ISO-8859-1')
+        # Title is not unique. Two different movieIDs can have the same title
         movies_sid_df = movies_1m_df.merge(
-            meta_df.drop(columns=['MovieID', 'Genre']),
-            on='Title',
+            meta_df.drop(columns=['Genre', 'Title']),
+            on='MovieID',
             how='left'
         )
         assert movies_sid_df.shape[0] == movies_1m_df.shape[0]
@@ -45,8 +46,8 @@ def run_preprocessing():
         movies_20m_df = pd.read_csv(movies_20m_file, engine='python', encoding='ISO-8859-1')
         movies_20m_df.columns = movies_column_names
         movies_sid_df = movies_20m_df.merge(
-            meta_df.drop(columns=['MovieID', 'Genre']),
-            on='Title',
+            meta_df.drop(columns=['Genre', 'Title']),
+            on='MovieID',
             how='left'
         )
         assert movies_sid_df.shape[0] == movies_20m_df.shape[0]

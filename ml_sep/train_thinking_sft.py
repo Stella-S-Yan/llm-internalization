@@ -331,7 +331,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         logging_steps=2000,
         save_strategy="steps",
         save_steps=2000,
-        save_total_limit=5,
+        save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
         # eval_strategy="no",
