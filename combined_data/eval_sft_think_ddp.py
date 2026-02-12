@@ -185,7 +185,7 @@ def main(run_num):
     local_rank, device = ddp_init()
     
     # --- assign devices via vLLM ---
-    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_merged_think_sft_model_{run_num}"
+    model_dir = str(config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_merged_think_sft_model_{run_num}")
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,

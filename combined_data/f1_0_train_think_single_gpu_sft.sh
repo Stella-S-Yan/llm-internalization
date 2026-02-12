@@ -17,8 +17,8 @@ echo "$CHECK_POINT"
 # Select parameters based on GPU index
 case $GPU_INDEX in
   0)
-    params="--LR 2e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
-            --TRAIN_BATCH_SIZE 16 --ACC_STEP 1 \
+    params="--LR 1e-4 --WEIGHT_DECAY 0.005 --WARMUP_STEPS 2000 \
+            --TRAIN_BATCH_SIZE 32 --ACC_STEP 1 \
             --LORA_RANK 32 --LORA_RATIO 2 --LORA_DROPOUT 0.05 \
             --TOTAL_STEPS 200000 --RUN_NUM $GPU_INDEX --CHECK_POINT $CHECK_POINT"
     ;;

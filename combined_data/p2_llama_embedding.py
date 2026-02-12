@@ -134,11 +134,14 @@ def embed_col(model, tokenizer, df, col_name, new_col_name, device, batch_size=2
 def gen_embedding():
 
     df = bagz_utils.read_parquet(config.META_OUTSIDE_EMB)
+    print(f"~~~~ !!! In df shape: {df.shape} ~~~~~~")
+    print(df.loc[df.asin == "B0007QGT20"])
+    print("========================")
 
     n_gpus = torch.cuda.device_count()
     chunk_size = math.ceil(len(df) / n_gpus)
     df_splits = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]
-    
+
     procs = []
     for gpu_id, df_split in enumerate(df_splits):
         p = Process(target=run_on_gpu, args=(gpu_id, df_split))
@@ -165,6 +168,9 @@ def gen_embedding():
     # 2. Concatenate and Save
     if combined_dfs:
         full_df = pd.concat(combined_dfs, ignore_index=True)
+        print(f"~~~~ !!! Out df shape: {df.shape} ~~~~~~")
+        print(full_df.loc[full_df.asin == "B0007QGT20"])
+        print("========================")
         
         # Save to the final destination (using the original variable without suffix)
         bagz_utils.save_parquet(full_df, config.META_TWO_EMB)

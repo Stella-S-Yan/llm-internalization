@@ -10,20 +10,28 @@ import json
 import re
 from tqdm import tqdm
 from collections import Counter
+<<<<<<< Updated upstream
+=======
+import argparse
+import os
+import pandas as pd
+>>>>>>> Stashed changes
 import numpy as np
 
 
 PROMPT_TEMPLATE = """
 <sft:think>
 user {uid}:
-{sid_cat_list}
+{sid_cat_brand_price_list}
 prediction:\n
 {predict}
 """
 
 TARGET_TEMPLATE = """
 <freq>{freq_A}</freq>
-<cat>{target_sid_cat}</cat>
+<cat>{target_cat}</cat>
+<brand>{target_brand}</brand>
+<price>{target_price}</price>
 <sid>{target_sid}</sid>{eos}
 """
 
@@ -61,14 +69,24 @@ def do_the_work(tokenizer, split):
     # sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
     sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['categories_concat']))
 
+    meta_df['brand'] = meta_df['brand'].fillna('unknown')
+    sid_to_brand = dict(zip(meta_df['formatted_sid'], meta_df['brand']))
+
+    num_bins = 10
+    cut = pd.cut(meta_df["price"], bins=num_bins)
+    price_left = np.array([interval.left if pd.notna(interval) else np.nan for interval in cut])
+    meta_df["price_quant"] = pd.Series(price_left).fillna(-1).astype(int)
+    sid_to_price = dict(zip(meta_df['formatted_sid'], meta_df['price_quant']))
+
     if split == "train":
-        data_reader = bagz.Reader(config.TRAIN_DATA)
+        split_file = os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_user_train.bagz" )
+        data_reader = bagz.Reader(split_file)
     elif split == "eval":
-        data_reader = bagz.Reader(config.EVAL_DATA)
+        split_file = os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_user_eval.bagz" )
+        data_reader = bagz.Reader(split_file)
     elif split == "test":
-        data_reader = bagz.Reader(config.TEST_DATA)
-    elif split == "train_eval":
-        data_reader = bagz.Reader(config.TRAIN_EVAL_DATA)
+        split_file = os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_user_test.bagz" )
+        data_reader = bagz.Reader(split_file)
     
 
     all_data = []
@@ -79,39 +97,34 @@ def do_the_work(tokenizer, split):
         history = record["input"]
         target_sid = record["target"]
 
-        # Prefix UID by data source
-        # if config.REVIEW_TYPE == "Beauty":
-        #     uid = f"B_{uid}"
-        # elif config.REVIEW_TYPE == "Toys_and_Games":
-        #     uid = f"T_{uid}"
-        # elif config.REVIEW_TYPE == "Sports_and_Outdoors":
-        #     uid = f"S_{uid}"
-        # elif config.REVIEW_TYPE == "Home_and_Kitchen":
-        #     uid = f"H_{uid}"
-        # elif config.REVIEW_TYPE == "Musical_Instruments":
-        #     uid = f"M_{uid}"
-        # elif config.REVIEW_TYPE == "Pet_Supplies":
-        #     uid = f"P_{uid}"
-
         # sids = [x.strip() for x in history.split(";")]
         sids = re.findall(PATTERN, history)
         cats = [sid_to_cat.get(i) for i in sids]
+        brands = [sid_to_brand.get(i) for i in sids]
+        prices = [sid_to_price.get(i) for i in sids]
 
         # most frequent Ax
         freq_A = most_frequent_Ax(sids)
 
-        sid_cat_list = "\n".join(f"{sids[i]} : {cats[i]}" for i in range(len(sids)))
-        target_sid_cat = sid_to_cat.get(target_sid)
+        sid_cat_brand_price_list = "\n".join(
+                f"{sid}: {cat}; {brand}; {price}"
+                for sid, cat, brand, price in zip(sids, cats, brands, prices)
+            )
+        target_cat = sid_to_cat.get(target_sid)
+        target_brand = sid_to_brand.get(target_sid)
+        target_price = sid_to_price.get(target_sid)
 
         prompt = PROMPT_TEMPLATE.format(
             uid=uid,
-            sid_cat_list=sid_cat_list,
+            sid_cat_brand_price_list=sid_cat_brand_price_list,
             predict=""
         ).strip()
 
         target = TARGET_TEMPLATE.format(
             freq_A=freq_A,
-            target_sid_cat=target_sid_cat,
+            target_cat=target_cat,
+            target_brand=target_brand,
+            target_price=target_price,
             target_sid=target_sid,
             eos=tokenizer.eos_token
         ).strip()
@@ -132,7 +145,9 @@ def do_the_work(tokenizer, split):
 
         solution = {
             "freq": freq_A if freq_A else 'None',
-            "cat": target_sid_cat,
+            "cat": target_cat,
+            "brand": target_brand,
+            "price": target_price,
             "sid": target_sid,
             "uid": uid
         }
@@ -162,15 +177,14 @@ def do_the_work(tokenizer, split):
     bagz_utils.save_record(all_data, config.PROCESSED_DATA_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_data_{split}.bagz")
 
 def main():
+
     # Only need to load tokenizer
-    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
     do_the_work(tokenizer, "eval")
     do_the_work(tokenizer, "test")
     do_the_work(tokenizer, "train")
-
-    # do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":
     main()

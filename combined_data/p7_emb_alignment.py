@@ -43,9 +43,9 @@ torch.backends.cudnn.benchmark = False
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 LOG_DIR = config.RUN_DIR / "all_sid_alignment"
-BATCH_SIZE = 2048
+BATCH_SIZE = 1024
 TOTAL_STEPS = 4_000     # plateau at step 2k
 LR =  1e-3         #  
 SCHEDULE = 'cosine'
@@ -110,46 +110,40 @@ class SIDDataset(Dataset):
     def __init__(self):
         print("--- Use all items in meta_df. ")
 
-        self.data = []
-        review_types = ["Toys_and_Games", "Sports_and_Outdoors", "Beauty", "Home_and_Kitchen", "Musical_Instruments", "Pet_Supplies"]
+        meta_df = bagz_utils.read_parquet(config.META_ALL_SID)
 
-        for review_type in review_types:
-            meta_df_path = os.path.join(
-                config.PROCESSED_DATA_DIR,
-                f"{config.DATA_SOURCE}_{review_type}_sid_embed_all_text_meta_df.bagz"
-            )
-            meta_df = bagz_utils.read_parquet(meta_df_path)
+        # Keep rows where (has_review==1) OR (description/title nonempty)
+        # df = meta_df.loc[
+        #     (meta_df["has_review"] == 1) |
+        #     ((meta_df["description"] != "") & (meta_df["title"] != ""))
+        # ].copy()
+        # print(f"--- Original rows: {meta_df.shape[0]}, after filtering bad description + title: {df.shape[0]}")
 
-            # Keep rows where (has_review==1) OR (description/title nonempty)
-            df = meta_df.loc[
-                (meta_df["has_review"] == 1) |
-                ((meta_df["description"] != "") & (meta_df["title"] != ""))
-            ].copy()
-            print(f"--- Original rows: {meta_df.shape[0]}, after filtering bad description + title: {df.shape[0]}")
+        df = meta_df.drop_duplicates(subset=["formatted_text"]).copy()
 
-            # Extract prefix: first 3 SID tokens
-            df["sid_prefix"] = df["formatted_sid"].str.split().str[:3].str.join(" ")
+        # Extract prefix: first 3 SID tokens
+        df["sid_prefix"] = df["formatted_sid"].str.split().str[:3].str.join(" ")
 
-            # Extract D index (remove the 'D' prefix and convert to int)
-            df["sid_D"] = df["formatted_sid"].str.split().str[3].str[1:].astype(int)
+        # Extract D index (remove the 'D' prefix and convert to int)
+        df["sid_D"] = df["formatted_sid"].str.split().str[3].str[1:].astype(int)
 
-            # Sort inside each semantic group by D index ascending
-            df = df.sort_values(["sid_prefix", "sid_D"], ascending=[True, True])
+        # Sort inside each semantic group by D index ascending
+        df = df.sort_values(["sid_prefix", "sid_D"], ascending=[True, True])
 
-            # Keep ONLY the first row per prefix (i.e., the lowest D-index row)
-            # df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
-            df = (
-                df.groupby("sid_prefix", group_keys=False)
-                .apply(SIDDataset.select_rows)
-                .reset_index(drop=True)
-            )
+        # Keep ONLY the first row per prefix (i.e., the lowest D-index row)
+        # df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
+        # df = (
+        #     df.groupby("sid_prefix", group_keys=False)
+        #     .apply(SIDDataset.select_rows)
+        #     .reset_index(drop=True)
+        # )
 
-            print(f"--- After dropping duplicate sids: {df.shape[0]}")
+        print(f"--- After dropping duplicate sids: {df.shape[0]}")
 
-            # train on all four levels
-            self.data.extend(df[["llama_embedding", "formatted_sid"]].values.tolist())
-            # train on 3 levels
-            # self.data.extend(df[["llama_embedding", "sid_prefix"]].values.tolist())
+        # train on all four levels
+        self.data = df[["llama_embedding", "formatted_sid"]].values.tolist()
+        # train on 3 levels
+        # self.data.extend(df[["llama_embedding", "sid_prefix"]].values.tolist())
 
 
         print(f"--- Training data size: {len(self.data)}") # 42,382, 664,413
@@ -367,13 +361,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     data_iter = itertools.cycle(dataloader)  # infinite iterator over dataloader
 
     for global_step in range(TOTAL_STEPS):
-        # if global_step == 400:
-        #     for g in optimizer.param_groups:
-        #         g["lr"] *= SCALE
-        
-        # if global_step == 1200:
-        #     for g in optimizer.param_groups:
-        #         g["lr"] *= SCALE
 
         batch = next(data_iter)  # sample one batch per step
         
@@ -388,12 +375,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         outputs = model(input_ids=inputs["input_ids"],
                         attention_mask=inputs["attention_mask"],
                         output_hidden_states=True)
-
-        # # hidden_states = outputs.hidden_states[-1]  # [B, seq_len, H]
-
-        # # Use last non-pad token for pooling (consistent with reference embeddings)
-        # last_indices = inputs["attention_mask"].sum(dim=1) - 1  # [B]
-        # C_batch = hidden_states[torch.arange(hidden_states.size(0)), last_indices]
 
         # Mean-pooling for embedding
         hidden_states = outputs.hidden_states[-1]  # [B, seq_len, H]

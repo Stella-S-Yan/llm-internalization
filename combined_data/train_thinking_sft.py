@@ -305,13 +305,13 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
-    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
+    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{Params.RUN_NUM}"
     NUM_WORKERS = 1
 
     # --- Training arguments ---
     training_args = TrainingArguments(
         output_dir=MODEL_SAVE_DIR,
-        logging_dir=params.LOGGING_DIR,
+        # logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
@@ -388,7 +388,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         trainer.train()
     else:
         print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
-        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Amazon_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
+        trainer.train(resume_from_checkpoint=f"{config.MODEL_DIR}/{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
 
 
 def main():
@@ -412,24 +412,25 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_acc{Params.ACC_STEP}_{Params.RUN_NUM}"
-    Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_Combined_train_thinking_sft" / run_name
+    run_name = f"{config.REVIEW_TYPE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_warmup_{Params.WARMUP_STEPS}_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_acc{Params.ACC_STEP}_{Params.RUN_NUM}"
+    Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_train_thinking_sft" / run_name
+    os.environ["TENSORBOARD_LOGGING_DIR"] = str(config.RUN_DIR / f"{config.DATA_SOURCE}_train_thinking_sft" / run_name)
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
     # Load model and tokenizer in local device
     base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
-    save_dir = MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
+    save_dir = MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
     # Load model to cpu first and let torchrun handle the device placement
     model, tokenizer = load_checkpoint(base_model_name, save_dir) 
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     print(tokenizer.eos_token)
     
-    train_dataset = train_thinking.ReasoningDataset("train", "sft", ["Toys_and_Games"])
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["Toys_and_Games"])
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["Toys_and_Games"])
+    train_dataset = train_thinking.ReasoningDataset("train", "sft", [config.REVIEW_TYPE])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", [config.REVIEW_TYPE])
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
     
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 5000

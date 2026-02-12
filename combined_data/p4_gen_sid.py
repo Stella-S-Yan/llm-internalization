@@ -30,8 +30,8 @@ def append_prefix_sid(seq):
 
 def _restore_model():
     # Load model checkpoint
-    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_Combined_all_rqvae"))
-    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_Combined_all_rqvae')}")
+    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae"))
+    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae')}")
     return model
 
 
@@ -44,7 +44,7 @@ def _process_df(model, meta_df, save_file_name):
 
     # Encode all rows
     sub_meta_df = meta_df.copy()
-    raw_item_embeddings = sub_meta_df['gte_embed'].tolist()
+    raw_item_embeddings = sub_meta_df['t5_embed'].tolist()
     # print(f"--- Encoding {len(raw_item_embeddings)} items with reviews ---")
     print(f"--- Encoding all items: {len(raw_item_embeddings)}")
     raw_item_embeddings = [np.array(emb, dtype=np.float32, copy=True) for emb in raw_item_embeddings]
@@ -56,8 +56,8 @@ def _process_df(model, meta_df, save_file_name):
     # Add Semantic ID to dataframe and save. 
     emb_idxs = jnp.argmax(codebook_indices, axis=-1).squeeze()
     # Prepare has_review flags
-    has_review_flags = sub_meta_df["has_review"].tolist()
-    collision_resolved_emb, stats = format_sid.assign_sequential_group_ids_with_stats(emb_idxs, total_items=meta_df.shape[0], has_review_flags=has_review_flags)
+    # has_review_flags = sub_meta_df["has_review"].tolist()
+    collision_resolved_emb, stats = format_sid.assign_sequential_group_ids_with_stats(emb_idxs, total_items=meta_df.shape[0], has_review_flags=None)
     print("Stats: ", stats)
 
 
@@ -70,8 +70,15 @@ def _process_df(model, meta_df, save_file_name):
 def gen_sid():
     model = _restore_model()
 
-    all_df = bagz_utils.read_parquet(config.META_TWO_EMB)
-    
+    emb_df = bagz_utils.read_parquet(config.META_TWO_EMB)
+    all_df = bagz_utils.read_parquet(config.META_NORMALIZED)    # with all rows including those with duplicate formatted_text
+
+    all_df = all_df.merge(
+        emb_df[['formatted_text', 't5_embed', 'llama_embedding']],
+        on='formatted_text',
+        how='left'
+    )
+
     # Mark if in review_df
     review_df = pd.read_json(config.AMAZON_REVIEW_DATASET, lines=True)
     num_users = review_df["reviewerID"].nunique()
