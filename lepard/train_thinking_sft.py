@@ -9,6 +9,9 @@ DDP using all GPUs available.
 $ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
 """
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
+
 import random
 import config
 import torch
@@ -431,7 +434,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"comb_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
+    run_name = f"{config.REVIEW_TYPE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
     Params.LOGGING_DIR =  config.RUN_DIR / "Lepard_train_seq_pred_aligned" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
@@ -442,16 +445,18 @@ def main():
     # Load model and tokenizer in local device
     base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
     # save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
-    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_all_sid_alignment"
+    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
     # Load model to cpu first and let torchrun handle the device placement
     model, tokenizer = load_checkpoint(base_model_name, save_dir) 
     print(f"model_device: {model.device}")
     old_vocab_size = 128_256
     print(tokenizer.eos_token)
     
-    train_dataset = reasoning_data.LepardDataset('sft', tokenizer, "train", dataset_type="50k")
-    eval_dataset = reasoning_data.LepardDataset('sft', tokenizer, "eval", dataset_type="50k")  
-    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "eval", dataset_type="50k")
+    train_dataset = reasoning_data.LepardDataset('sft', tokenizer, "train")
+    print(f"--- Train dataset size: {len(train_dataset)}")
+    
+    eval_dataset = reasoning_data.LepardDataset('sft', tokenizer, "eval")  
+    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "eval")
 
     SEED = 411
     rng = random.Random(SEED)   
@@ -460,7 +465,7 @@ def main():
     indices = sorted(indices)   # optional but recommended
     gen_eval_dataset = Subset(gen_eval_dataset, indices)
 
-    indices = rng.sample(range(len(eval_dataset)), 5000)
+    indices = rng.sample(range(len(eval_dataset)), 1000)
     indices = sorted(indices)   # optional but recommended
     eval_dataset = Subset(eval_dataset, indices)
     print(f"---Eval dataset size: {len(eval_dataset)}")

@@ -69,26 +69,16 @@ def load_checkpoint(base_model_name, save_dir):
 
 class LepardDataset(Dataset):
 
-    def __init__(self, datatype, tokenizer, split, dataset_type="50k"):
+    def __init__(self, datatype, tokenizer, split):
         self.datatype = datatype
         self.tokenizer = tokenizer
 
         if split == "train":
-            self.df = pd.read_parquet(config.LEPARD_50k_TRAIN)
+            self.df = pd.read_parquet(config.LEPARD_TRAIN)
         elif split == "eval":
-            if dataset_type == "50k":
-                self.df = pd.read_parquet(config.LEPARD_50k_EVAL)
-            elif dataset_type == "20k": 
-                self.df = pd.read_parquet(config.LEPARD_20k_EVAL)
-            elif dataset_type == "10k":
-                self.df = pd.read_parquet(config.LEPARD_10k_EVAL)
+            self.df = pd.read_parquet(config.LEPARD_EVAL)
         elif split == "test":
-            if dataset_type == "50k":
-                self.df = pd.read_parquet(config.LEPARD_50k_TEST)
-            elif dataset_type == "20k": 
-                self.df = pd.read_parquet(config.LEPARD_20k_TEST)
-            elif dataset_type == "10k":
-                self.df = pd.read_parquet(config.LEPARD_10k_TEST)
+            self.df = pd.read_parquet(config.LEPARD_TEST)
 
 
     def __len__(self):

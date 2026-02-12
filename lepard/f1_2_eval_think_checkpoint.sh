@@ -3,9 +3,8 @@ set +e
 
 GPU_INDEX=$1
 CHECK_POINT=$2 
-DATA_TYPE=$3
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,4,5,6,7
 
 # Unique rendezvous port per GPU
 RDZV_PORT="2950${GPU_INDEX}"
@@ -19,8 +18,8 @@ echo "RDZV_PORT=$RDZV_PORT"
 
 # export CUDA_VISIBLE_DEVICES=$GPU_INDEX
 torchrun \
-  --nproc_per_node=8 \
+  --nproc_per_node=7 \
   --rdzv_endpoint=localhost:$RDZV_PORT \
-  eval_think_sft_ddp.py --RUN_NUM $GPU_INDEX --DATA_TYPE $DATA_TYPE
+  eval_think_sft_ddp.py --RUN_NUM $GPU_INDEX
 
 echo "Finished run on GPU $GPU_INDEX"

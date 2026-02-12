@@ -314,7 +314,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
-    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
+    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{Params.RUN_NUM}"
     NUM_WORKERS = 1
 
     # --- Training arguments ---
@@ -398,7 +398,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         trainer.train()
     else:
         print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
-        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/MovieLens_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
+        trainer.train(resume_from_checkpoint=f"{config.MODEL_DIR}/{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{str(params.RUN_NUM)}/checkpoint-{str(params.CHECK_POINT)}")
 
 
 def main():
@@ -422,7 +422,7 @@ def main():
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
-    run_name = f"ML_{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_{Params.RUN_NUM}"
+    run_name = f"{config.REVIEW_TYPE}_{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_{Params.RUN_NUM}"
     Params.LOGGING_DIR =  config.RUN_DIR / "ML_train_think_pred" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
@@ -431,7 +431,7 @@ def main():
     # Load model and tokenizer in local device
     base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
     # save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
-    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_combined_sid_alignment"
+    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_sid_alignment"
     # Load model to cpu first and let torchrun handle the device placement
     model, tokenizer = load_checkpoint(base_model_name, save_dir) 
     print(f"model_device: {model.device}")
@@ -440,8 +440,8 @@ def main():
     
     train_dataset = sample_sequence_data.SampleSeqDataset()
 
-    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", ["1m"])
-    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", ["1m"])
+    eval_dataset = train_thinking.ReasoningDataset("eval", "sft", [config.REVIEW_TYPE])
+    gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
 
     SEED = 411
     GEN_EVAL_SUBSET_SIZE = 1000

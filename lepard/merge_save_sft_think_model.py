@@ -13,7 +13,7 @@ import argparse
 
 
 base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
-embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_all_sid_alignment"
+embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 
 def main(check_point, run_num):
 
@@ -65,7 +65,7 @@ def main(check_point, run_num):
     # ------------------------------------
     print(f"Restored think SFT model with extended vocabulary")
 
-    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_merged_think_sft_model_{run_num}"
+    save_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_merged_think_sft_model_{run_num}"
     merged_model.save_pretrained(save_dir)
     tokenizer.save_pretrained(save_dir)
 
@@ -81,7 +81,7 @@ if __name__=="__main__":
     # 3. Parse arguments
     args = parser.parse_args()
 
-    args.CHECK_POINT = 290000
+    # args.CHECK_POINT = 290000
     # 4. Use arguments
 
     main(args.CHECK_POINT, args.RUN_NUM)

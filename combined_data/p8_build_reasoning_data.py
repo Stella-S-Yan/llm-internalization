@@ -10,6 +10,7 @@ import json
 import re
 from tqdm import tqdm
 from collections import Counter
+import numpy as np
 
 
 PROMPT_TEMPLATE = """
@@ -40,11 +41,25 @@ def most_frequent_Ax(ids):
     return best
 
 
+def concat_categories(x):
+    if isinstance(x, np.ndarray) and len(x) > 0:
+        # unwrap object array: [ array([...]) ]
+        if isinstance(x[0], np.ndarray):
+            x = x[0]
+
+    if isinstance(x, (list, np.ndarray)) and len(x) > 1:
+        return ", ".join(map(str, x[1:]))
+
+    return ""
+
+
 
 def do_the_work(tokenizer, split):
 
     meta_df = bagz_utils.read_parquet(config.META_ALL_SID) 
-    sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
+    meta_df['categories_concat'] = meta_df['categories'].apply(concat_categories)
+    # sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
+    sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['categories_concat']))
 
     if split == "train":
         data_reader = bagz.Reader(config.TRAIN_DATA)
@@ -65,18 +80,18 @@ def do_the_work(tokenizer, split):
         target_sid = record["target"]
 
         # Prefix UID by data source
-        if config.REVIEW_TYPE == "Beauty":
-            uid = f"B_{uid}"
-        elif config.REVIEW_TYPE == "Toys_and_Games":
-            uid = f"T_{uid}"
-        elif config.REVIEW_TYPE == "Sports_and_Outdoors":
-            uid = f"S_{uid}"
-        elif config.REVIEW_TYPE == "Home_and_Kitchen":
-            uid = f"H_{uid}"
-        elif config.REVIEW_TYPE == "Musical_Instruments":
-            uid = f"M_{uid}"
-        elif config.REVIEW_TYPE == "Pet_Supplies":
-            uid = f"P_{uid}"
+        # if config.REVIEW_TYPE == "Beauty":
+        #     uid = f"B_{uid}"
+        # elif config.REVIEW_TYPE == "Toys_and_Games":
+        #     uid = f"T_{uid}"
+        # elif config.REVIEW_TYPE == "Sports_and_Outdoors":
+        #     uid = f"S_{uid}"
+        # elif config.REVIEW_TYPE == "Home_and_Kitchen":
+        #     uid = f"H_{uid}"
+        # elif config.REVIEW_TYPE == "Musical_Instruments":
+        #     uid = f"M_{uid}"
+        # elif config.REVIEW_TYPE == "Pet_Supplies":
+        #     uid = f"P_{uid}"
 
         # sids = [x.strip() for x in history.split(";")]
         sids = re.findall(PATTERN, history)
@@ -151,9 +166,10 @@ def main():
     model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_Combined_all_sid_alignment"
     tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)  # Make sure to use fast tokenizer
 
-    do_the_work(tokenizer, "train")
     do_the_work(tokenizer, "eval")
     do_the_work(tokenizer, "test")
+    do_the_work(tokenizer, "train")
+
     # do_the_work(tokenizer, "train_eval")
 
 if __name__ == "__main__":

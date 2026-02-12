@@ -30,8 +30,8 @@ def append_prefix_sid(seq):
 
 def _restore_model():
     # Load model checkpoint
-    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_Combined_all_rqvae"))
-    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_Combined_all_rqvae')}")
+    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae"))
+    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae')}")
     return model
 
 def _batched_encode(model, data, batch_size=512):
@@ -91,12 +91,12 @@ def gen_sid():
     model = _restore_model()
 
     # destination_emb
-    dest_emb = np.load(config.LEPARD_OUTSIDE_EMB + "_dest_gte.npy", mmap_mode="r")
+    dest_emb = np.load(f"{config.LEPARD_OUTSIDE_EMB}_{config.REVIEW_TYPE}_dest_t5.npy", mmap_mode="r")
     logger.info(f"Total rows: {dest_emb.shape[0]}")
     _process_emb(model, dest_emb, etype="dest")
 
     # quote_emb
-    quote_emb = np.load(config.LEPARD_OUTSIDE_EMB + "_quote_gte.npy", mmap_mode="r")
+    quote_emb = np.load(f"{config.LEPARD_OUTSIDE_EMB}_{config.REVIEW_TYPE}_quote_t5.npy", mmap_mode="r")
     logger.info(f"Total rows: {quote_emb.shape[0]}")
     _process_emb(model, quote_emb, etype="quote")
 

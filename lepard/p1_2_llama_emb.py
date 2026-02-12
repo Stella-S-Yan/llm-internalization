@@ -155,12 +155,3 @@ def gen_embedding():
 # Entrypoint
 if __name__ == "__main__":
     gen_embedding()
-
-
-
-#  Use the embeddings later, save for quote
-# meta_df = pd.read_parquet(...)
-# dest_emb = np.load("llama_dest_emb.npy", mmap_mode="r")
-
-# row_id = meta_df.loc[i, "row_id"]
-# vector = dest_emb[row_id]

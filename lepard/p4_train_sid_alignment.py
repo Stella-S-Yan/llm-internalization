@@ -45,7 +45,7 @@ torch.backends.cudnn.benchmark = False
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"   
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_all_sid_alignment"
+MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 LOG_DIR = config.RUN_DIR / "Lepard_all_sid_alignment"
 BATCH_SIZE = 128
 TOTAL_STEPS = 8_000     # plateau at step 2k
@@ -57,7 +57,7 @@ WARMUP_UP = 400
 
 
 # Create an informative run name
-RUN_NAME = f"combined_scheduler{SCHEDULE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
+RUN_NAME = f"{config.REVIEW_TYPE}_lr{LR}_warmup{WARMUP_UP}_temp{TEMP}_total_steps{TOTAL_STEPS}_batch{BATCH_SIZE}"
 
 
 def load_model_tokenizer(run_test: False):

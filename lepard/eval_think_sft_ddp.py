@@ -156,7 +156,7 @@ def main(run_num, data_type):
     local_rank, device = ddp_init()
     
     # --- assign devices via vLLM ---
-    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_merged_think_sft_model_{run_num}"
+    model_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_merged_think_sft_model_{run_num}"
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
@@ -172,7 +172,7 @@ def main(run_num, data_type):
   
     # --- Prepare dataset ---
     print(f"---- Eval on {data_type} dataset ----")
-    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "test", dataset_type=data_type)
+    gen_eval_dataset = reasoning_data.LepardDataset('grpo', tokenizer, "test")
     # gen_eval_dataset = Subset(gen_eval_dataset, range(500))
     
     print(f"Eval on : {len(gen_eval_dataset)} data points.")

@@ -44,7 +44,7 @@ def _process_df(model, meta_df, save_file_name):
 
     # Encode all rows
     sub_meta_df = meta_df.copy()
-    raw_item_embeddings = sub_meta_df['gte_embed'].tolist()
+    raw_item_embeddings = sub_meta_df['t5_embed'].tolist()
     # print(f"--- Encoding {len(raw_item_embeddings)} items with reviews ---")
     print(f"--- Encoding all items: {len(raw_item_embeddings)}")
     raw_item_embeddings = [np.array(emb, dtype=np.float32, copy=True) for emb in raw_item_embeddings]
@@ -74,7 +74,7 @@ def gen_sid():
     all_df = bagz_utils.read_parquet(config.META_NORMALIZED)    # with all rows including those with duplicate formatted_text
 
     all_df = all_df.merge(
-        emb_df[['formatted_text', 'gte_embed', 'llama_embedding']],
+        emb_df[['formatted_text', 't5_embed', 'llama_embedding']],
         on='formatted_text',
         how='left'
     )

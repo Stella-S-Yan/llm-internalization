@@ -16,7 +16,7 @@ RUN_DIR = DATA_DIR / "runs"
 # REVIEW_TYPE = "1m"
 
 DATA_SOURCE = "Lepard"
-REVIEW_TYPE = "20k"
+REVIEW_TYPE = "50k"
 
 # DATA_SOURCE = "Amazon"
 # REVIEW_TYPE = "Beauty" #   1 "Toys_and_Games" 2 "Sports_and_Outdoors" 3 "Beauty" 4 "Home_and_Kitchen"  5 "Musical_Instruments"  6 "Pet_Supplies"

@@ -103,7 +103,7 @@ def get_data():
     df = meta_df.drop_duplicates(subset=["formatted_text"])
     print(f"--- After dropping duplicate embeddings: {df.shape[0]}")
 
-    raw_item_embeddings = df["gte_embed"]
+    raw_item_embeddings = df["t5_embed"]
 
     print(f"Total items for RQVAE training: {len(df)}") 
     # Ensure all arrays are writable
@@ -168,7 +168,7 @@ def train():
     rngs = nnx.Rngs(params=0, ema=1)
 
     model = rqvae.RQVAE(
-        input_dim=1024,
+        input_dim=768,
         encoder_layer_dims=[512, 256, 128],
         output_dim=hp["vqvae"]["embedding_dim"],
         decoder_layer_dims=[128, 256, 512],

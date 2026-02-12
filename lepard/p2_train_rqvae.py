@@ -68,7 +68,7 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
     plt.plot(epochs, train_usage_ratios,  linestyle='--', color='g', linewidth=1, label="train_usage_ratios")
     plt.title("Codebook usage pct")
     plt.xlabel("Epoch")
-    plt.savefig(os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_Combined_rqvae_train.png"))
+    plt.savefig(os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_rqvae_train.png"))
     plt.show()
 
     # Clear again after saving to ensure next call starts fresh
@@ -78,8 +78,8 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
 def get_data():
 
     # Load embeddings as memmap
-    dest_emb = np.load(config.LEPARD_OUTSIDE_EMB + "_dest_gte.npy", mmap_mode="r")
-    quote_emb = np.load(config.LEPARD_OUTSIDE_EMB + "_quote_gte.npy", mmap_mode="r")
+    dest_emb = np.load(f"{config.LEPARD_OUTSIDE_EMB}_{config.REVIEW_TYPE}_dest_t5.npy", mmap_mode="r")
+    quote_emb = np.load(f"{config.LEPARD_OUTSIDE_EMB}_{config.REVIEW_TYPE}_quote_t5.npy", mmap_mode="r")
 
     # Convert to writable float32 arrays
     dest_emb = np.array(dest_emb, dtype=np.float32, copy=True)
@@ -96,7 +96,7 @@ def get_data():
 
 def train():
     os.makedirs(config.MODEL_DIR, exist_ok=True)
-    checkpoint_dir = os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_Combined_all_rqvae")
+    checkpoint_dir = os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae")
     
     # Load data on cpu only
     raw_item_embeddings = get_data()    # Returns a NumPy array (keep on CPU)
@@ -149,7 +149,7 @@ def train():
     rngs = nnx.Rngs(params=0, ema=1)
 
     model = rqvae.RQVAE(
-        input_dim=1024,
+        input_dim=768,
         encoder_layer_dims=[512, 256, 128],
         output_dim=hp["vqvae"]["embedding_dim"],
         decoder_layer_dims=[128, 256, 512],
@@ -207,7 +207,7 @@ def train():
         train_quantization_loss.append(quantization_loss)
         train_usage_ratios.append(usage_ratio)
         
-        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.99:
+        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.95:
         # if loss < best_loss:
             checkpointing.save_checkpoint(
                 checkpoint_dir=checkpoint_dir,
