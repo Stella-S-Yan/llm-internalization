@@ -25,60 +25,6 @@ from utils import bagz_utils
 import pickle
 
 
-class MergedReasoningDataset(Dataset):
-    def __init__(self, datatype: str):
-        self.datatype = datatype
-
-        data_path = (
-            config.PROCESSED_DATA_DIR
-            / "merged_train_think_data.bagz"
-        )
-
-        with open(data_path, "rb") as f:
-            self.data = pickle.load(f)
-
-
-    def __len__(self):
-        return len(self.data)
-    
-
-    def __getitem__(self, idx):
-        record = self.data[idx]
-        if self.datatype == "sft":
-            return {
-                # "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
-                # "labels": torch.tensor(record["labels"], dtype=torch.long)
-
-                "input_ids": record["input_ids"],
-                "labels": record["labels"],
-                "length": len(record["input_ids"])
-            }
-        elif self.datatype == "grpo":
-            return {
-                "prompt": record["prompt"],
-                "solution": record["solution"],
-            }
-        elif self.datatype == "raw_text_vllm":  # used for vLLM-based thinking_sft model evaluation
-            return {
-                "prompt": {"prompt": record["prompt"], "prompt_token_ids": record["prompt_token_ids"].tolist()},
-                "target": record["target"],
-                "solution": record["solution"],
-            }
-        elif self.datatype == "raw_text":
-            return {
-                "prompt_token_ids": record["prompt_token_ids"],
-                "target": record["target"],
-            }
-        elif self.datatype == "gen_eval":
-            return {
-                "gen_prompt": record["prompt"],
-                "gen_target": record["target"]
-            }
-        else:
-            raise ValueError(
-                f"Invalid datatype '{self.datatype}'. "
-                f"Expected one of: ['sft', 'grpo', 'raw_text', 'raw_text_vllm']"
-            )
 
 class ReasoningDataset(Dataset):
     def __init__(self, split, datatype: str, sources):

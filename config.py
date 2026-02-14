@@ -12,14 +12,14 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed_data"
 MODEL_DIR = DATA_DIR / "model"
 RUN_DIR = DATA_DIR / "runs"
 
-# DATA_SOURCE = "MovieLens"
-# REVIEW_TYPE = "1m"
+DATA_SOURCE = "MovieLens"
+REVIEW_TYPE = "1m"
 
 # DATA_SOURCE = "Lepard"
 # REVIEW_TYPE = "20k"
 
-DATA_SOURCE = "Amazon"
-REVIEW_TYPE = "Toys_and_Games"  # "Sports_and_Outdoors" # "Toys_and_Games" # "Beauty" 
+# DATA_SOURCE = "Amazon"
+# REVIEW_TYPE = "Toys_and_Games"  # "Sports_and_Outdoors" # "Toys_and_Games" # "Beauty" 
 
 
 AMAZON_REVIEW_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"reviews_{REVIEW_TYPE}_5.json") 

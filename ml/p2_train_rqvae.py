@@ -68,7 +68,7 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
     plt.plot(epochs, train_usage_ratios,  linestyle='--', color='g', linewidth=1, label="train_usage_ratios")
     plt.title("Codebook usage pct")
     plt.xlabel("Epoch")
-    plt.savefig(os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_Combined_rqvae_train.png"))
+    plt.savefig(os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_rqvae_train.png"))
     plt.show()
 
     # Clear again after saving to ensure next call starts fresh

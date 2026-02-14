@@ -163,16 +163,17 @@ def sample_seq_collator(batch, tokenizer):
     """
     # evaluation data
     if "input_ids" in batch[0]: 
-        input_ids = [f["input_ids"] for f in batch]
-        labels = [f["labels"] for f in batch]
+        input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in batch]
+        labels = [torch.tensor(f["labels"], dtype=torch.long) for f in batch]
         
         # Pad sequences to the same length (left padding can be added if needed)
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id, padding_side="left")
         labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-100, padding_side="left")
-
+        attention_mask = (input_ids != tokenizer.pad_token_id).long()
         return {
             'input_ids': input_ids,
             'labels': labels,
+            'attention_mask': attention_mask
         }
 
     # Training data
@@ -208,8 +209,10 @@ def sample_seq_collator(batch, tokenizer):
     # Pad sequences to the same length (left padding can be added if needed)
     input_ids = torch.nn.utils.rnn.pad_sequence(input_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id, padding_side="left")
     labels = torch.nn.utils.rnn.pad_sequence(labels_list, batch_first=True, padding_value=-100, padding_side="left")
+    attention_mask = (input_ids != tokenizer.pad_token_id).long()
 
     return {
             'input_ids': input_ids,
             'labels': labels,
+            'attention_mask': attention_mask
         }
