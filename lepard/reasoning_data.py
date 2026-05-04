@@ -21,7 +21,7 @@ import re
 
 PROMPT_TEMPLATE = """
 <sft:think>
-<dcourt>  {dest_court} <dcourt>
+<dcourt>  {dest_court} </dcourt>
 <ddate> {dest_date} </ddate>
 <dname> {dest_name} </dname>
 <dsid> {dest_formatted_sid} </dsid>
@@ -30,7 +30,7 @@ quote:
 """
 
 TARGET_TEMPLATE = """
-<scourt>  {source_court} <scourt>
+<scourt>  {source_court} </scourt>
 <sdate> {source_date} </sdate>
 <sname> {source_name} </sname>
 <ssid> {quote_formatted_sid} </ssid>{eos}
