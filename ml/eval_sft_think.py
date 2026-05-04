@@ -12,12 +12,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 
 from tqdm import tqdm
-import config
-from combined_data import train_thinking
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
 import argparse
 import math
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.amazon import train_thinking
+
 
 
 def ddp_init():

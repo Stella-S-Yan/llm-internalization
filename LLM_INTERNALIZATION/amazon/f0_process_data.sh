@@ -9,13 +9,13 @@ source ~/miniconda3/etc/profile.d/conda.sh
 # python p2_llama_embedding.py
 
 
-# # train rqvae
-# conda activate jax
+# train rqvae
+# conda activate jax_test
 # python p3_train_rqvae.py
 
 
-# Do do every dataset
-# conda activate jax
+# # Do do every dataset
+# conda activate jax_test
 # python p4_gen_sid.py
 # conda activate torch_think
 # python p5_gen_sequence.py
@@ -23,7 +23,7 @@ source ~/miniconda3/etc/profile.d/conda.sh
 
 # python p7_emb_alignment.py
 
-python p8_build_reasoning_data.py
+# python p8_build_reasoning_data.py
 
 
 

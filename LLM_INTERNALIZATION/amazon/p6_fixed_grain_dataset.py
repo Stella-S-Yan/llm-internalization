@@ -2,14 +2,14 @@
 Pregenerate all possible subsequences and create a fixed training dataset
 """
 
-import config
-from utils import bagz_utils
 import random
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 
 class GenFixedData():
     def __init__(self):
-        # self.train_eval_data = []
         self.train_data = []
         self.eval_data = []
         self.test_data = []
@@ -57,19 +57,11 @@ class GenFixedData():
         sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
         self.train_data.extend(sub_sequences)
 
-        # # Train + eval
-        # sid_seq = record["sequence"][:-1]
-        # sub_seqs = self._get_subsequence(sid_seq)
-        # sub_sequences = self._gen_train_data_point(sub_seqs, uid, reviewerID)
-        # self.train_eval_data.extend(sub_sequences)
-
         return
 
 
     def _save_data(self):
         rng = random.Random(411)
-        # rng.shuffle(self.train_eval_data)
-        # bagz_utils.save_record(self.train_eval_data, config.TRAIN_EVAL_DATA)
         rng.shuffle(self.train_data)
         bagz_utils.save_record(self.train_data, config.TRAIN_DATA)
         rng.shuffle(self.eval_data)
@@ -98,7 +90,6 @@ class GenFixedData():
         subsequences = []
         n = len(seq)
         for start in range(n):
-            # end index goes from start+2 to start+max_seq_len (inclusive), but not beyond sequence length
             for end in range(start + config.MIN_HISTORY_LEN, min(n, start + config.MAX_HISTORY_LEN) + 1):
                 subsequences.append(seq[start:end])
         return subsequences

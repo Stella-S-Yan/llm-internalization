@@ -1,23 +1,13 @@
-"""
-2_618_971 total training data
-
-
-DDP using all GPUs available.
-# Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_thinking_sft.py
-"""
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
 
 
-import config
 import torch
 import torch.distributed as dist
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import argparse
-import train_thinking
 import random
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -27,6 +17,11 @@ from transformers import TrainerCallback
 from torch.utils.data import Subset
 from functools import partial
 import math
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.amazon import train_thinking
+
+
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -191,7 +186,7 @@ class GenerateEvalCallback(TrainerCallback):
         self.tokenizer = tokenizer
         self.eval_fn = eval_fn
         self.eval_steps = eval_steps
-        self.batch_size = 16
+        self.batch_size = 8
         self.best_metric = None  # Track best metric
 
     # def on_step_end(self, args, state, control, **kwargs):
@@ -199,7 +194,7 @@ class GenerateEvalCallback(TrainerCallback):
         eval_interval = self.eval_steps
 
         # Run every eval_steps
-        if state.global_step > 0 and state.global_step % eval_interval == 0:
+        if state.global_step > 150_000 and state.global_step % eval_interval == 0:
 
             is_ddp = (
                 torch.distributed.is_initialized()
@@ -238,7 +233,7 @@ class GenerateEvalCallback(TrainerCallback):
                     self.tokenizer,
                     eval_loader,
                     num_beams=20, 
-                    max_new_tokens=128,
+                    max_new_tokens=64,
                     top_k_list=[1, 5, 10],
                     print_random_example=False
                 )
@@ -326,7 +321,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         save_total_limit=10,
         load_best_model_at_end=False,
         eval_strategy="steps",
-        eval_steps=2000,
+        eval_steps=5000,
         optim="adamw_torch",
         bf16=True,          # <<< enable bfloat16 (H100 optimized)
         fp16=False,         # optional: if you want fp16 instead
@@ -380,7 +375,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         eval_dataset=gen_eval_dataset,
         tokenizer=tokenizer,
         eval_fn=evaluate_sequence_recall,
-        eval_steps=2000,
+        eval_steps=5000,
     )
     trainer.add_callback(callback)
 

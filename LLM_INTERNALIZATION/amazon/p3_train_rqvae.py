@@ -1,25 +1,24 @@
 """
 Train rqvae model using embeddings. 
-Combine data from multiple dataset to train rqvae.
-
-$ python p3_train_rqvae.py
 """
 
 
 import pandas as pd
 import logging
 import numpy as np
-import jax.numpy as jnp
-from flax import nnx
-from quantization import rqvae, _layers
-import optax
-import jax
-from utils import checkpointing
 import matplotlib.pyplot as plt
-import config
-import tensorflow as tf
 from utils import bagz_utils
 import os
+
+import optax
+import jax
+import jax.numpy as jnp
+from flax import nnx
+import tensorflow as tf
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import checkpointing
+from LLM_INTERNALIZATION.quantization import rqvae, _layers
 
 from absl import logging as absl_logging
 absl_logging.set_verbosity(absl_logging.ERROR)
@@ -64,7 +63,7 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
     plt.yscale('log')  # keeps x-axis linear
     plt.legend()
     plt.title("Training loss progress (log scale)")
-    plt.xlabel("Epoch")
+    plt.xlabel("Step")
     plt.ylabel("Loss")
 
     plt.subplot(1, 2, 2)
@@ -79,35 +78,15 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
 
 
 def get_data():
-    sources = [ "Toys_and_Games", "Sports_and_Outdoors", "Beauty"]
 
-    meta_data_path = os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_meta_two_emb_df.bagz")
-    meta_df = bagz_utils.read_parquet(meta_data_path)
-    print("meta_df shape: ", meta_df.shape)
+    # Load embeddings as memmap
+    meta_df = bagz_utils.read_parquet(config.META_OUTSIDE_EMB)
+    emb = meta_df["t5_embed"].tolist()
     
-    review_data_path = os.path.join(config.DATA_DIR, config.DATA_SOURCE, f"reviews_{config.REVIEW_TYPE}_5.json") 
-    print(review_data_path)
-    review_df = pd.read_json(review_data_path, lines=True)
-    num_users = review_df["reviewerID"].nunique()
-    print(f"---Users: {num_users}")
-    meta_df["has_review"] = meta_df["asin"].isin(review_df["asin"]).astype(int)
+    # Convert to writable float32 arrays
+    raw_item_embeddings = np.array(emb, dtype=np.float32, copy=True)
 
-    # # Keep rows where description is not empty and title is not empty, and has_review == 1
-    # df = meta_df[
-    #     (meta_df["has_review"] == 1) |  # keep all rows with has_review==1
-    #     ((meta_df["description"] != "") & (meta_df["title"] != ""))  # or keep rows where both fields are non-empty
-    # ]
-    # print(f"--- Original rows: {meta_df.shape[0]}, after filtering bad description + title: {df.shape[0]}")
-
-    # keep only unique embeddings to train rqvae
-    df = meta_df.drop_duplicates(subset=["formatted_text"])
-    print(f"--- After dropping duplicate embeddings: {df.shape[0]}")
-
-    raw_item_embeddings = df["t5_embed"]
-
-    print(f"Total items for RQVAE training: {len(df)}") 
-    # Ensure all arrays are writable
-    raw_item_embeddings = [np.array(emb, dtype=np.float32, copy=True) for emb in raw_item_embeddings]
+    print(f"Total items for RQVAE training: {raw_item_embeddings.shape[0]}")  
 
     return raw_item_embeddings
 
@@ -115,7 +94,7 @@ def get_data():
 
 def train():
     os.makedirs(config.MODEL_DIR, exist_ok=True)
-    checkpoint_dir = os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae")
+    checkpoint_dir = os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_rqvae")
     
     # Load data on cpu only
     raw_item_embeddings = get_data()    # Returns a NumPy array (keep on CPU)
@@ -139,29 +118,8 @@ def train():
     )
     
     # Set hyper parameters
-    hp = {
-        "training": {
-            "total_steps": 30_000, #20_000,
-            "warmup_steps": 3_000,
-        },
-        "learning_rate_schedule": {
-            "init_value": 0.0,
-            "peak_value": 1e-3,  
-            "end_value": 1e-5,
-        },
-        "optimizer": {
-            "type": "adamw",  # or "adagrad"
-            "weight_decay": 0.055,
-        },
-        "vqvae": {
-            "num_embeddings": 256,
-            "embedding_dim": 16,
-            "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": 1.5,     # 2.0 and 1.0 are both worse. Increase commitment_cost will depress quant_loss
-            "data_variance": data_variance,
-        }
-    }
-
+    hp = config.HP.copy()
+    hp["vqvae"]["data_variance"] = data_variance
 
 
     # Initialize the model and optimizer
@@ -202,20 +160,12 @@ def train():
     best_reconstruction_loss = float("inf")
     iterator = iter(dataset)
     N = len(raw_item_embeddings)
-    steps_per_epoch = N // batch_size
-    # key = jax.random.PRNGKey(42)
 
     global_step = 0
     total_steps = hp["training"]["total_steps"]
 
     for step in range(total_steps):
-        # Use Jax-native shuffling
-        # key, subkey = jax.random.split(key)
-        # idx = jax.random.permutation(subkey, N)
-        # batch_idx = idx[:batch_size]  # sample batch
-        # batch = jnp.array(raw_item_embeddings[batch_idx])
-        # batch = jax.device_put(batch)
-
+        
         batch = next(iterator).numpy()  # eagerly convert TF tensor -> NumPy
         batch = jax.device_put(batch)   # Now put on GPU
         
@@ -226,8 +176,7 @@ def train():
         train_quantization_loss.append(quantization_loss)
         train_usage_ratios.append(usage_ratio)
         
-        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.80:
-        # if loss < best_loss:
+        if reconstruction_loss < best_reconstruction_loss and usage_ratio > config.CODEBOOK_PCT:
             checkpointing.save_checkpoint(
                 checkpoint_dir=checkpoint_dir,
                 step=step,

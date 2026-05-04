@@ -1,8 +1,10 @@
 import pandas as pd
 import logging
-import config
-from utils import bagz_utils
 import random
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +22,6 @@ def run_preprocessing():
     sorted_df = merged_df.sort_values(by=['reviewerID', 'unixReviewTime'])
     num_items = sorted_df['asin'].nunique()
     logger.debug(f"---Items: {num_items}")
-
-    # Extract prefix: first 3 SID tokens
-    # sorted_df["sid_prefix_lst"] = sorted_df["formatted_sid"].str.split().str[:3]
 
     # Aggregate both formatted_sid and asin sequences
     user_sequences = sorted_df.groupby('reviewerID').agg({

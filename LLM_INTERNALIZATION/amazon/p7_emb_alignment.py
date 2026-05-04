@@ -7,17 +7,12 @@ The objective (contrastive loss) is smooth and well-behaved.
 The model's other weights are frozen, so the optimization surface doesn't shift. 
 So a complex LR schedul is not necessary, but a gental warmup and/or decay can still help stabilize early updates and avoid overshooting
 
-
 Difficult to make it DDP. Just keep the current single GPU version
-Set CUDA_VISIBLE_DEVICES and run
-$ python train_sid_emb_alignment.py
 """
 
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import config
-from utils import bagz_utils
 from torch.utils.data import Dataset, DataLoader, RandomSampler
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
@@ -26,6 +21,9 @@ import os
 import itertools
 from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_schedule, get_polynomial_decay_schedule_with_warmup
 import numpy as np
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
@@ -50,12 +48,10 @@ TOTAL_STEPS = 4_000     # plateau at step 2k
 LR =  1e-3         #  
 SCHEDULE = 'cosine'
 
-# temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
-TEMP = 0.2     # high temperature: smoother distribution, softer gradients
-SCALE = 0.01    # Best
+TEMP = 0.2     
 WARMUP_UP = 400
 POLY_POW = 2
-POLY_END_LR = 1e-6  # better than 1e-6 for Toys_and_Games
+POLY_END_LR = 1e-6
 
 
 # Create an informative run name
@@ -112,13 +108,6 @@ class SIDDataset(Dataset):
 
         meta_df = bagz_utils.read_parquet(config.META_ALL_SID)
 
-        # Keep rows where (has_review==1) OR (description/title nonempty)
-        # df = meta_df.loc[
-        #     (meta_df["has_review"] == 1) |
-        #     ((meta_df["description"] != "") & (meta_df["title"] != ""))
-        # ].copy()
-        # print(f"--- Original rows: {meta_df.shape[0]}, after filtering bad description + title: {df.shape[0]}")
-
         df = meta_df.drop_duplicates(subset=["formatted_text"]).copy()
 
         # Extract prefix: first 3 SID tokens
@@ -130,23 +119,12 @@ class SIDDataset(Dataset):
         # Sort inside each semantic group by D index ascending
         df = df.sort_values(["sid_prefix", "sid_D"], ascending=[True, True])
 
-        # Keep ONLY the first row per prefix (i.e., the lowest D-index row)
-        # df = df.groupby("sid_prefix", as_index=False).head(1).reset_index(drop=True)
-        # df = (
-        #     df.groupby("sid_prefix", group_keys=False)
-        #     .apply(SIDDataset.select_rows)
-        #     .reset_index(drop=True)
-        # )
-
         print(f"--- After dropping duplicate sids: {df.shape[0]}")
 
         # train on all four levels
         self.data = df[["llama_embedding", "formatted_sid"]].values.tolist()
-        # train on 3 levels
-        # self.data.extend(df[["llama_embedding", "sid_prefix"]].values.tolist())
 
-
-        print(f"--- Training data size: {len(self.data)}") # 42,382, 664,413
+        print(f"--- Training data size: {len(self.data)}") 
 
     def __len__(self):
         return len(self.data)
@@ -336,10 +314,10 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
     elif SCHEDULE == "pow":
         scheduler = get_polynomial_decay_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=WARMUP_UP,         # e.g., 500 steps
-            num_training_steps=TOTAL_STEPS,     # total steps in your training
-            lr_end=POLY_END_LR,                        # final LR
-            power=POLY_POW                            # polynomial power (>1 for faster early decay)
+            num_warmup_steps=WARMUP_UP,         
+            num_training_steps=TOTAL_STEPS,     
+            lr_end=POLY_END_LR,                       
+            power=POLY_POW                            
         )
 
     model.to(DEVICE)
@@ -387,7 +365,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
         
         # Normalize embeddings
         C_norm = F.normalize(C_batch, dim=1)
-        # C_norm = C_norm.to(torch.bfloat16)  # optional, but usually C_batch is already bf16
 
         # Contrastive loss
         logits1 = (A_norm @ C_norm.T) / TEMP
@@ -430,11 +407,6 @@ def train_sid_embeddings(model, dataset, tokenizer, old_vocab_size, writer):
             writer.add_scalar("eval/ndcg@5", ndcg["ndcg@5"], global_step)
             writer.add_scalar("eval/ndcg@10", ndcg["ndcg@10"], global_step)
             model.train()
-
-            # if recall["top10_acc"] > best_recall:
-            #     best_recall = recall["top10_acc"]
-            #     save_model(model, tokenizer, old_vocab_size)
-            #     print(f"model saved for recal@10 = {best_recall}")
 
             if mean_alignment > best_alignment:
                 best_alignment = mean_alignment

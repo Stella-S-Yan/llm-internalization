@@ -3,8 +3,6 @@ Build reasoning data takes time. Build once and save the data to save experiment
 """
 import os
 from transformers import AutoTokenizer
-import config
-from utils import bagz_utils
 import bagz
 import json
 import re
@@ -12,6 +10,9 @@ from tqdm import tqdm
 from collections import Counter
 import pandas as pd
 import numpy as np
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 
 PROMPT_TEMPLATE = """
@@ -23,7 +24,6 @@ prediction:\n
 """
 
 TARGET_TEMPLATE = """
-<freq>{freq_A}</freq>
 <cat>{target_cat}</cat>
 <brand>{target_brand}</brand>
 <price>{target_price}</price>
@@ -61,7 +61,6 @@ def do_the_work(tokenizer, split):
 
     meta_df = bagz_utils.read_parquet(config.META_ALL_SID) 
     meta_df['categories_concat'] = meta_df['categories'].apply(concat_categories)
-    # sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['fine_category']))
     sid_to_cat = dict(zip(meta_df['formatted_sid'], meta_df['categories_concat']))
 
     meta_df['brand'] = meta_df['brand'].fillna('unknown')
@@ -92,7 +91,6 @@ def do_the_work(tokenizer, split):
         history = record["input"]
         target_sid = record["target"]
 
-        # sids = [x.strip() for x in history.split(";")]
         sids = re.findall(PATTERN, history)
         cats = [sid_to_cat.get(i) for i in sids]
         brands = [sid_to_brand.get(i) for i in sids]

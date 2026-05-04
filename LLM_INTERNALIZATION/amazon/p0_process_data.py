@@ -1,18 +1,9 @@
-"""
-Generate product embeddings using SentenceBert. 
-
-$ python sbert_embedding.py
-"""
-
-
 import pandas as pd
 import logging
-import config
-from utils import bagz_utils
 import ast
 import numpy as np
-
-
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 logger = logging.getLogger(__name__)
 

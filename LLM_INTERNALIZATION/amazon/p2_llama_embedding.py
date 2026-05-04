@@ -1,10 +1,3 @@
-""" 
-Generate product embeddings with llama
-
-# Use all gpus
-
-$ python llama_embedding.py
-"""
 
 import os
 import pandas as pd
@@ -13,12 +6,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import pandas as pd
 from tqdm import tqdm
 import math
-from utils import bagz_utils
-import config
-import numpy as np
 from multiprocessing import Process
-import torch.multiprocessing as mp
 
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"  
 

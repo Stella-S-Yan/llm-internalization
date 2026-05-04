@@ -3,7 +3,6 @@ from flax import nnx
 import optax
 import logging
 
-import config
 from utils.checkpointing import load_checkpoint
 from quantization.rqvae import RQVAE
 from quantization._layers import VectorQuantizerEMA

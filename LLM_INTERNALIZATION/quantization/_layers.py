@@ -4,10 +4,6 @@ from flax import nnx
 
 from typing import List
  
-# For tensor sharding   
-# linear_init = nnx.with_partitioning(nnx.initializers.glorot_uniform(), (None, "data"))
-# bias_init = nnx.with_partitioning(nnx.initializers.zeros, ("data",)) 
-
 class Encoder(nnx.Module):
     def __init__(self, in_dim, layer_dims, out_dim, rngs: nnx.Rngs):
         layer_sizes = [in_dim] + layer_dims + [out_dim]

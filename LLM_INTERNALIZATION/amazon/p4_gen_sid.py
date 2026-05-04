@@ -3,11 +3,11 @@ import numpy as np
 import jax.numpy as jnp
 from utils import load_model
 from utils import format_sid
-import config
-from utils import bagz_utils
 import pandas as pd
 import os
 
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils, load_model, format_sid
 
 # --- Reset logging completely ---
 for handler in logging.root.handlers[:]:
@@ -30,8 +30,8 @@ def append_prefix_sid(seq):
 
 def _restore_model():
     # Load model checkpoint
-    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae"))
-    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_rqvae')}")
+    model, _ = load_model.load_rqvae(checkpoint_dir=os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_rqvae"))
+    logger.info(f"RQVAE model restored from {os.path.join(config.MODEL_DIR, f'{config.DATA_SOURCE}_{config.REVIEW_TYPE}_rqvae')}")
     return model
 
 

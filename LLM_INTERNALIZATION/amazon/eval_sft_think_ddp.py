@@ -1,19 +1,3 @@
-"""
-Evaluate SFT result that is trained on think data. 
-Use vLLM to speed up inference. Use vLLM as a python engine, so every gpu device do its
-own vllm-based inference and return local recall statistic. 
-Results from devices are aggregated and print out the final global recall@k
-
-vLLM does not work with DDP, so don't use torchrun
-vLLM is used as a python kernel, and one is initiated for each gpu. To launch the script
-$ python eval_think_sft.py
-
-
-"""
-
-# spawn creates a fresh Python process instead of forking.
-# Each worker safely initializes CUDA independently.
-# This is exactly what vLLM expects on multi-GPU setups.
 
 import multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
@@ -22,20 +6,16 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.nn.utils.rnn import pad_sequence
 
-# Needs to import vllm before torch
 from tqdm import tqdm
-import config
-import train_thinking
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
-import random
 import os
 import argparse
-import hashlib
-from torch.utils.data import Subset
 import math
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.amazon import train_thinking
 
 SID_PATTERN = re.compile(r"<sid>(.*?)<")
 
@@ -199,17 +179,6 @@ def main(run_num):
 
     if dist.is_initialized():
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-  
-    # --- Prepare dataset ---
-    # gen_eval_dataset = train_thinking.ReasoningDataset("eval", "grpo", [config.REVIEW_TYPE])
-    # SEED = 411
-    # GEN_EVAL_SUBSET_SIZE = 5000
-    # rng = random.Random(SEED)   # <- LOCAL RNG (important!)
-    # indices = rng.sample(range(len(gen_eval_dataset)), GEN_EVAL_SUBSET_SIZE)
-    # indices = sorted(indices)   # optional but recommended
-    # gen_eval_dataset = Subset(gen_eval_dataset, indices)
-    # print(f"Eval on {config.REVIEW_TYPE}: {len(gen_eval_dataset)}")
-    # print(gen_eval_dataset[10])
     
     gen_eval_dataset = train_thinking.ReasoningDataset("test", "grpo", [config.REVIEW_TYPE])
 

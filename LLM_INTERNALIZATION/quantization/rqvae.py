@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import flax.nnx as nnx
-from quantization._layers import Encoder, Decoder, ResidualVectorQuantizer
+from LLM_INTERNALIZATION.quantization._layers import Encoder, Decoder, ResidualVectorQuantizer
 
 from typing import List
 
