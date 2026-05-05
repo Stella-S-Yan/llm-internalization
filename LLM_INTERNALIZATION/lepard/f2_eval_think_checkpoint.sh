@@ -4,7 +4,7 @@ set +e
 GPU_INDEX=$1
 CHECK_POINT=$2 
 
-export CUDA_VISIBLE_DEVICES=0,1,2,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 # Unique rendezvous port per GPU
 RDZV_PORT="2950${GPU_INDEX}"

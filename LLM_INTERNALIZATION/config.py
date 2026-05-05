@@ -18,11 +18,11 @@ RUN_DIR = WORKSPACE_DIR / "runs"
 # DATA_SOURCE = "MovieLens"
 # REVIEW_TYPE = "1m"
 
-# DATA_SOURCE = "Lepard"
-# REVIEW_TYPE = "20k"
+DATA_SOURCE = "Lepard"
+REVIEW_TYPE = "10k"
 
-DATA_SOURCE = "Amazon"
-REVIEW_TYPE =  "Beauty"   # "Sports_and_Outdoors" # "Toys_and_Games" # "Beauty" 
+# DATA_SOURCE = "Amazon"
+# REVIEW_TYPE =  "Beauty"   
 
 
 AMAZON_REVIEW_DATASET = os.path.join(DATA_DIR, DATA_SOURCE, f"reviews_{REVIEW_TYPE}_5.json") 
@@ -146,31 +146,60 @@ elif DATA_SOURCE == "MovieLens":
         "vqvae": {
             "num_embeddings": 256,
             "embedding_dim": 16,
-            "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": 1.5,     # Increase commitment_cost will depress quant_loss
+            "ema_decay": 0.99,          
+            "commitment_cost": 1.5,     
         }
     }
     CODEBOOK_PCT = 0.7
 elif DATA_SOURCE == "Lepard":
-    HP = {
-        "training": {
-            "total_steps": 30_000, #20_000,
-            "warmup_steps": 3_000,
-        },
-        "learning_rate_schedule": {
-            "init_value": 0.0,
-            "peak_value": 1e-3,  
-            "end_value": 1e-5,
-        },
-        "optimizer": {
-            "type": "adamw",  # or "adagrad"
-            "weight_decay": 0.055,
-        },
-        "vqvae": {
-            "num_embeddings": 256,
-            "embedding_dim": 16,
-            "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
+    BATCH_SIZE = 128
+    LR = 6e-3
+    TOTAL_STEPS = 8_000
+    TEMP = 0.2
+    WARM_UP = 400
+    if REVIEW_TYPE == "20k": 
+        HP = {
+            "training": {
+                "total_steps": 20_000, 
+                "warmup_steps": 2_000,
+            },
+            "learning_rate_schedule": {
+                "init_value": 0.0,
+                "peak_value": 1e-3,  
+                "end_value": 1e-5,
+            },
+            "optimizer": {
+                "type": "adamw",  
+                "weight_decay": 0.055,
+            },
+            "vqvae": {
+                "num_embeddings": 256,
+                "embedding_dim": 16,
+                "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
+                "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
+            }
         }
-    }
-    CODEBOOK_PCT = 0.95
+        CODEBOOK_PCT = 0.95
+    elif REVIEW_TYPE == "10k":
+        HP = {
+            "training": {
+                "total_steps": 20_000, 
+                "warmup_steps": 3_000,
+            },
+            "learning_rate_schedule": {
+                "init_value": 0.0,
+                "peak_value": 1e-3,  
+                "end_value": 1e-5,
+            },
+            "optimizer": {
+                "type": "adamw",  
+                "weight_decay": 0.055,
+            },
+            "vqvae": {
+                "num_embeddings": 256,
+                "embedding_dim": 16,
+                "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
+                "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
+            }
+        }
+        CODEBOOK_PCT = 0.92

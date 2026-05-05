@@ -1,22 +1,18 @@
-"""
-Train rqvae model using embeddings. 
-Combine data from multiple dataset to train rqvae.
-
-$ python p3_train_rqvae.py
-"""
 
 
 import logging
 import numpy as np
 from flax import nnx
-from quantization import rqvae, _layers
 import optax
 import jax
-from utils import checkpointing
 import matplotlib.pyplot as plt
-import config
 import tensorflow as tf
 import os
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import checkpointing
+from LLM_INTERNALIZATION.quantization import rqvae, _layers
+
 
 from absl import logging as absl_logging
 absl_logging.set_verbosity(absl_logging.ERROR)
@@ -61,13 +57,13 @@ def save_plot(epochs, train_loss, train_reconstruction_loss, train_quantization_
     plt.yscale('log')  # keeps x-axis linear
     plt.legend()
     plt.title("Training loss progress (log scale)")
-    plt.xlabel("Epoch")
+    plt.xlabel("Step")
     plt.ylabel("Loss")
 
     plt.subplot(1, 2, 2)
     plt.plot(epochs, train_usage_ratios,  linestyle='--', color='g', linewidth=1, label="train_usage_ratios")
     plt.title("Codebook usage pct")
-    plt.xlabel("Epoch")
+    plt.xlabel("Step")
     plt.savefig(os.path.join(config.MODEL_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_rqvae_train.png"))
     plt.show()
 
@@ -120,30 +116,8 @@ def train():
     )
     
     # Set hyper parameters
-    hp = {
-        "training": {
-            "total_steps": 30_000, #20_000,
-            "warmup_steps": 3_000,
-        },
-        "learning_rate_schedule": {
-            "init_value": 0.0,
-            "peak_value": 1e-3,  
-            "end_value": 1e-5,
-        },
-        "optimizer": {
-            "type": "adamw",  # or "adagrad"
-            "weight_decay": 0.055,
-        },
-        "vqvae": {
-            "num_embeddings": 256,
-            "embedding_dim": 16,
-            "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
-            "data_variance": data_variance,
-        }
-    }
-
-
+    hp = config.HP.copy()
+    hp["vqvae"]["data_variance"] = data_variance
 
     # Initialize the model and optimizer
     rngs = nnx.Rngs(params=0, ema=1)
@@ -183,20 +157,11 @@ def train():
     best_reconstruction_loss = float("inf")
     iterator = iter(dataset)
     N = len(raw_item_embeddings)
-    steps_per_epoch = N // batch_size
-    # key = jax.random.PRNGKey(42)
 
     global_step = 0
     total_steps = hp["training"]["total_steps"]
 
     for step in range(total_steps):
-        # Use Jax-native shuffling
-        # key, subkey = jax.random.split(key)
-        # idx = jax.random.permutation(subkey, N)
-        # batch_idx = idx[:batch_size]  # sample batch
-        # batch = jnp.array(raw_item_embeddings[batch_idx])
-        # batch = jax.device_put(batch)
-
         batch = next(iterator).numpy()  # eagerly convert TF tensor -> NumPy
         batch = jax.device_put(batch)   # Now put on GPU
         
@@ -207,7 +172,7 @@ def train():
         train_quantization_loss.append(quantization_loss)
         train_usage_ratios.append(usage_ratio)
         
-        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.95:
+        if reconstruction_loss < best_reconstruction_loss and usage_ratio > config.CODEBOOK_PCT:
         # if loss < best_loss:
             checkpointing.save_checkpoint(
                 checkpoint_dir=checkpoint_dir,

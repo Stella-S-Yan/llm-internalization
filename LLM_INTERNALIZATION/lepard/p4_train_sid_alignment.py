@@ -1,23 +1,6 @@
-"""
-Tune the embeddings of the new vocabulary, such that the embedding of a sid is closer to the embedding
-of its text description.
-
-Have very few trainable parameters (1024 * hidden_dim). 
-The objective (contrastive loss) is smooth and well-behaved. 
-The model's other weights are frozen, so the optimization surface doesn't shift. 
-So a complex LR schedul is not necessary, but a gental warmup and/or decay can still help stabilize early updates and avoid overshooting
-
-
-Difficult to make it DDP. Just keep the current single GPU version
-Set CUDA_VISIBLE_DEVICES and run
-$ python train_sid_emb_alignment.py
-"""
-
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import config
-from utils import bagz_utils
 from torch.utils.data import Dataset, DataLoader, RandomSampler, ConcatDataset
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
@@ -28,6 +11,9 @@ from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_sched
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+
+from LLM_INTERNALIZATION import config
+
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
@@ -47,13 +33,11 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_all_sid_alignment"
 LOG_DIR = config.RUN_DIR / "Lepard_all_sid_alignment"
-BATCH_SIZE = 128
-TOTAL_STEPS = 8_000     # plateau at step 2k
-LR =  6e-3         #  
-
-# temp = 0.05, 0.07, 0.1, 0.2. Lower temp increases pressure on negatives but can make training brittle; find the sweet spot.
-TEMP = 0.2     # high temperature: smoother distribution, softer gradients
-WARMUP_UP = 400
+BATCH_SIZE = config.BATCH_SIZE
+TOTAL_STEPS = config.TOTAL_STEPS 
+LR =  config.LR         
+TEMP = config.TEMP    
+WARMUP_UP = config.WARM_UP
 
 
 # Create an informative run name

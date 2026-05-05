@@ -1,12 +1,12 @@
 import torch
-import math
 import numpy as np
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from multiprocessing import Process, set_start_method
 from tqdm import tqdm
-import config
 import os
+
+from LLM_INTERNALIZATION import config
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 

@@ -1,13 +1,11 @@
 import numpy as np
 import pandas as pd
-import config
+
+from LLM_INTERNALIZATION import config
 
 SEED = 411
 
 
-# -------------------------------------------------
-# 1. Split 50k ONCE
-# -------------------------------------------------
 def split_data(df, fraction=(0.9, 0.05, 0.05)):
     rng = np.random.default_rng(SEED)
     indices = rng.permutation(len(df))
@@ -27,9 +25,6 @@ def split_data(df, fraction=(0.9, 0.05, 0.05)):
     return train_df, eval_df, test_df
 
 
-# -------------------------------------------------
-# 2. Columns defining subset identity
-# -------------------------------------------------
 SUBSET_COLS = [
     "dest_id", "source_id", "dest_date", "dest_court", "dest_name",
     "dest_cite", "source_date", "source_court", "source_name",
@@ -37,11 +32,7 @@ SUBSET_COLS = [
 ]
 
 
-# -------------------------------------------------
-# 4. Main workflow
-# -------------------------------------------------
-
-# Load full 50k dataset
+# Load full dataset
 df = pd.read_parquet(config.LEPARD_SID)
 
 # Split once

@@ -4,10 +4,10 @@ import logging
 import psutil
 import multiprocessing
 from sentence_transformers import SentenceTransformer
-from utils import bagz_utils
-import config
 import pandas as pd
 import numpy as np
+
+from LLM_INTERNALIZATION import config
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,13 +15,11 @@ logger = logging.getLogger(__name__)
 
 def gen_embedding(text, ttype):
     # 1. Hardware Setup
-    # With 80GB, we want to ensure we utilize all available GPUs on the system
     num_gpus = torch.cuda.device_count()
     target_devices = [f"cuda:{i}" for i in range(num_gpus)] if num_gpus > 0 else ["cpu"]
     logger.info(f"Detected {num_gpus} GPUs. Using devices: {target_devices}")
 
     # 2. Load and Optimize Model
-    # Sentence-T5-Base is efficient; Large/XL versions would also fit easily in 80GB
     model_name = "sentence-transformers/sentence-t5-base"
     model = SentenceTransformer(model_name)
     

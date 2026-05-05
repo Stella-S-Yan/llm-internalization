@@ -1,22 +1,11 @@
 
-import random
-import config
 import torch
-from peft import LoraConfig, get_peft_model, TaskType
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
-from transformers import TrainerCallback
-import numpy as np
-import bagz
-from tqdm import tqdm
-from torch.utils.data import DataLoader, DistributedSampler
-import argparse
-from torch.utils.data import Subset
+from torch.utils.data import Dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
-import random
 import pandas as pd
-import re
 
+from LLM_INTERNALIZATION import config
 
 
 PROMPT_TEMPLATE = """

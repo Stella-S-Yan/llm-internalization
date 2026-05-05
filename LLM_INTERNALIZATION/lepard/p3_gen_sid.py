@@ -1,12 +1,11 @@
 import logging
 import numpy as np
 import jax.numpy as jnp
-from utils import load_model
-from utils import format_sid
-import config
-from utils import bagz_utils
 import pandas as pd
 import os
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import load_model, format_sid
 
 
 # --- Reset logging completely ---
@@ -56,10 +55,6 @@ def _process_emb(model, raw_item_embeddings, etype):
     print(f"--- Encoding all items: {total_items}")
     raw_item_embeddings = np.array(raw_item_embeddings, dtype=np.float32, copy=True)
     all_data = jnp.array(raw_item_embeddings)
-
-    # Generate semantic id
-    # reconstructions, codebook_indices, usage_ratios = model(all_data, False)
-    # emb_idxs = jnp.argmax(codebook_indices, axis=-1).squeeze()
 
     emb_idxs, usage_ratios = _batched_encode(model, raw_item_embeddings, batch_size=512)
     print(usage_ratios)

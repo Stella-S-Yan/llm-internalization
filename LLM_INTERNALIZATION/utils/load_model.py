@@ -3,9 +3,9 @@ from flax import nnx
 import optax
 import logging
 
-from utils.checkpointing import load_checkpoint
-from quantization.rqvae import RQVAE
-from quantization._layers import VectorQuantizerEMA
+from LLM_INTERNALIZATION.utils.checkpointing import load_checkpoint
+from LLM_INTERNALIZATION.quantization._layers import VectorQuantizerEMA
+from LLM_INTERNALIZATION.quantization.rqvae import RQVAE
 
 logging.basicConfig(level=logging.DEBUG)
 

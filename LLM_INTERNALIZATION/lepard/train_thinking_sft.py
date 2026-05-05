@@ -1,19 +1,7 @@
-"""
-Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
-Use all types of reivews.
-
-
-
-DDP using all GPUs available.
-# Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
-"""
-
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
 
 import random
-import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
 from torch.utils.data import DataLoader
@@ -26,8 +14,10 @@ from torch.utils.data import Subset
 import os
 import random
 import torch.distributed as dist
-import reasoning_data
 import math
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.lepard import reasoning_data
 
 
 class Params:
@@ -224,7 +214,7 @@ class GenerateEvalCallback(TrainerCallback):
         eval_interval = self.eval_steps
 
         # Run every eval_steps
-        if state.global_step > 0 and state.global_step % eval_interval == 0:
+        if state.global_step > 100000 and state.global_step % eval_interval == 0:
 
             is_ddp = (
                 torch.distributed.is_initialized()
@@ -331,7 +321,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
     print(f"@@@ total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
 
-    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{Params.RUN_NUM}"
+    MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{Params.RUN_NUM}"
     NUM_WORKERS = 4
 
     # --- Training arguments ---
@@ -409,7 +399,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         trainer.train()
     else:
         print(f"... Continue training from {params.CHECK_POINT} on node {params.RUN_NUM}")
-        trainer.train(resume_from_checkpoint=f"/usr/local/google/home/stellasyan/Documents/llm_internalization/data/model/Lepard_think_sft_adaptor_{params.RUN_NUM}/checkpoint-{params.CHECK_POINT}")
+        trainer.train(resume_from_checkpoint=f"{config.MODEL_DIR}/{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{params.RUN_NUM}/checkpoint-{params.CHECK_POINT}")
 
 
 def main():
@@ -427,20 +417,16 @@ def main():
     parser.add_argument("--RUN_NUM", type=int, default=0, help="Run index")
     parser.add_argument("--CHECK_POINT", type=int, default=0, help="Checkpoint number")
 
-    
-
     args = parser.parse_args()
 
     for key, value in vars(args).items():
         setattr(Params, key, value)
 
     run_name = f"{config.REVIEW_TYPE}_lr{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "Lepard_train_seq_pred_aligned" / run_name
+    Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
-
-    
 
     # Load model and tokenizer in local device
     base_model_name = "meta-llama/Llama-3.2-1B-Instruct"

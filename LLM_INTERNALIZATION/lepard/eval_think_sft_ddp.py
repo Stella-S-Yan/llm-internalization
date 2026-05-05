@@ -14,14 +14,12 @@ import argparse
 
 # Needs to import vllm before torch
 from tqdm import tqdm
-import config
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import re
 import os
-import train_thinking_sft
-import reasoning_data
 import math
-from torch.utils.data import Subset
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.lepard import reasoning_data
 
 
 def ddp_init():

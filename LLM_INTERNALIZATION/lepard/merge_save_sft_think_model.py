@@ -1,15 +1,11 @@
-"""
-vLLM does not support PEFT models directly, so we need to merge the adapters into the base model
-before loading into vLLM.
 
-$ python merge_save_sft_think_model.py --checkpoint_step 35000
-"""
 from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import config
 import torch
 import os
 import argparse
+
+from LLM_INTERNALIZATION import config
 
 
 base_model_name = "meta-llama/Llama-3.2-1B-Instruct"
@@ -17,7 +13,7 @@ embedding_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_a
 
 def main(check_point, run_num):
 
-    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_think_sft_adaptor_{run_num}" / f"checkpoint-{check_point}"
+    think_sft_adaptor_dir = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_think_sft_adaptor_{run_num}" / f"checkpoint-{check_point}"
 
     # Load BASE MODEL again — quantized or FP16 as desired
     model = AutoModelForCausalLM.from_pretrained(
