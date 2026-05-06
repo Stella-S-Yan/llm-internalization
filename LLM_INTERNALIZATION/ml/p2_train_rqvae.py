@@ -1,22 +1,16 @@
-"""
-Train rqvae model using embeddings. 
-Combine data from multiple dataset to train rqvae.
-
-$ python p3_train_rqvae.py
-"""
-
 
 import logging
 import numpy as np
 from flax import nnx
-from quantization import rqvae, _layers
 import optax
 import jax
-from utils import checkpointing, bagz_utils
 import matplotlib.pyplot as plt
-import config
 import tensorflow as tf
 import os
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import checkpointing, bagz_utils
+from LLM_INTERNALIZATION.quantization import rqvae, _layers
 
 from absl import logging as absl_logging
 absl_logging.set_verbosity(absl_logging.ERROR)
@@ -116,30 +110,8 @@ def train():
     )
     
     # Set hyper parameters
-    hp = {
-        "training": {
-            "total_steps": 20_000, #20_000,
-            "warmup_steps": 2_000,
-        },
-        "learning_rate_schedule": {
-            "init_value": 0.0,
-            "peak_value": 1e-3,  
-            "end_value": 5e-5,
-        },
-        "optimizer": {
-            "type": "adamw",  # or "adagrad"
-            "weight_decay": 0.055,
-        },
-        "vqvae": {
-            "num_embeddings": 256,
-            "embedding_dim": 16,
-            "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-            "commitment_cost": 1.5,     # Increase commitment_cost will depress quant_loss
-            "data_variance": data_variance,
-        }
-    }
-
-
+    hp = config.HP.copy()
+    hp["vqvae"]["data_variance"] = data_variance
 
     # Initialize the model and optimizer
     rngs = nnx.Rngs(params=0, ema=1)
@@ -197,7 +169,7 @@ def train():
         train_quantization_loss.append(quantization_loss)
         train_usage_ratios.append(usage_ratio)
         
-        if reconstruction_loss < best_reconstruction_loss and usage_ratio >0.7:
+        if reconstruction_loss < best_reconstruction_loss and usage_ratio > config.CODEBOOK_PCT:
         # if loss < best_loss:
             checkpointing.save_checkpoint(
                 checkpoint_dir=checkpoint_dir,

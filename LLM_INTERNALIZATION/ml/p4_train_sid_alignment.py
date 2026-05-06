@@ -19,7 +19,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import config
 from torch.utils.data import Dataset, DataLoader, RandomSampler
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
@@ -29,7 +28,7 @@ from transformers import get_cosine_schedule_with_warmup, get_inverse_sqrt_sched
 import numpy as np
 import pandas as pd
 
-
+from LLM_INTERNALIZATION import config
 
 # Set seeds for reproducibility
 seed = 411
@@ -45,12 +44,12 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_SAVE_DIR = config.MODEL_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_sid_alignment"
 LOG_DIR = config.RUN_DIR / "ML_sid_alignment"
-BATCH_SIZE = 512
-TOTAL_STEPS = 4_000     # plateau at step 2k
-LR =  1e-3         #  
+BATCH_SIZE = config.BATCH_SIZE
+TOTAL_STEPS = config.TOTAL_STEPS     # plateau at step 2k
+LR =  config.LR         #  
 
-TEMP = 0.2     # high temperature: smoother distribution, softer gradients
-WARMUP_UP = 400
+TEMP = config.TEMP     # high temperature: smoother distribution, softer gradients
+WARMUP_UP = config.WARM_UP
 
 
 # Create an informative run name

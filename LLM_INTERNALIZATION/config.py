@@ -15,11 +15,11 @@ PROCESSED_DATA_DIR = WORKSPACE_DIR / "processed_data"
 MODEL_DIR = WORKSPACE_DIR / "model"
 RUN_DIR = WORKSPACE_DIR / "runs"
 
-# DATA_SOURCE = "MovieLens"
-# REVIEW_TYPE = "1m"
+DATA_SOURCE = "MovieLens"
+REVIEW_TYPE = "1m"
 
-DATA_SOURCE = "Lepard"
-REVIEW_TYPE = "10k"
+# DATA_SOURCE = "Lepard"
+# REVIEW_TYPE = "10k"
 
 # DATA_SOURCE = "Amazon"
 # REVIEW_TYPE =  "Beauty"   
@@ -129,6 +129,11 @@ if DATA_SOURCE == "Amazon":
     }
     CODEBOOK_PCT = 0.75 
 elif DATA_SOURCE == "MovieLens":
+    BATCH_SIZE = 512
+    LR = 1e-3
+    TOTAL_STEPS = 4_000
+    TEMP = 0.2
+    WARM_UP = 400
     HP = {
         "training": {
             "total_steps": 20_000, #20_000,

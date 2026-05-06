@@ -5,10 +5,11 @@ Plot and save user_sequence length distribution into a figure.
 
 import pandas as pd
 import logging
-import config
-from utils import bagz_utils
 import matplotlib.pyplot as plt
 import os
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

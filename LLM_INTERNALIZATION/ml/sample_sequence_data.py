@@ -5,27 +5,11 @@ import re
 import pandas as pd
 from collections import Counter
 import os
-import bisect
 
-import config
-from utils import bagz_utils
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
+from LLM_INTERNALIZATION.ml import p8_ablation_think_freq
 
-
-# --- Global Templates ---
-PROMPT_TEMPLATE = """
-<sft:think>
-user {uid}:
-{sid_year_genre_list}
-prediction:\n
-{predict}
-"""
-
-TARGET_TEMPLATE = """
-<freq>{freq_A}</freq>
-<year>{target_year}</year>
-<genre>{target_genre}</genre>
-<sid>{target_sid}</sid>{eos}
-"""
 
 PATTERN = re.compile(r"A\d+\s+B\d+\s+C\d+\s+D\d+")
 
@@ -54,8 +38,6 @@ class SampleSeqDataset(Dataset):
     def __len__(self):
         return 3_000_000  # or any large number
 
-    # def set_epoch(self, epoch):
-        # random.seed(411 + epoch)
 
     def __getitem__(self, idx):
         record, review_type = random.choice(self.data)
@@ -77,22 +59,35 @@ class SampleSeqDataset(Dataset):
             for sid in sids
         )
 
+        # sid_list = "; ".join(sid for sid in sids)
+
         target_year = self.sid_to_year.get(target_sid)
         target_genre = self.sid_to_genre.get(target_sid)
 
-        prompt = PROMPT_TEMPLATE.format(
+        prompt = p8_ablation_think_freq.PROMPT_TEMPLATE.format(
             uid=uid,
             sid_year_genre_list=sid_year_genre_list,
             predict=""
         ).strip()
 
-        target = TARGET_TEMPLATE.format(
+        target = p8_ablation_think_freq.TARGET_TEMPLATE.format(
             freq_A=freq_A,
             target_year=target_year,
             target_genre=target_genre,
             target_sid=target_sid,
             eos=self.eos_token
         ).strip()
+
+        # prompt = p8_ablation_think_freq.PROMPT_TEMPLATE.format(
+        #     uid=uid,
+        #     sid_list=sid_list,
+        #     predict=""
+        # ).strip()
+
+        # target = p8_ablation_think_freq.TARGET_TEMPLATE.format(
+        #     target_sid=target_sid,
+        #     eos=self.eos_token
+        # ).strip()
 
         solution = {
             "freq": freq_A if freq_A else 'None',

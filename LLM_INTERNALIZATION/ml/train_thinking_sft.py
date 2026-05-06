@@ -1,19 +1,8 @@
-"""
-Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
-Use all types of reivews.
-
-
-
-DDP using all GPUs available.
-# Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
-"""
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # or "true"
 
 import random
-import config
 import torch
 from peft import LoraConfig, get_peft_model, TaskType
 from torch.utils.data import DataLoader
@@ -24,11 +13,14 @@ from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 from torch.utils.data import Subset
 import random
-from combined_data import train_thinking
 from functools import partial
 import sample_sequence_data
 import torch.distributed as dist
 import math
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.amazon import train_thinking
+
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -208,7 +200,7 @@ class GenerateEvalCallback(TrainerCallback):
         eval_interval = self.eval_steps
 
         # Run every eval_steps
-        if state.global_step > 0 and state.global_step % eval_interval == 0:
+        if state.global_step > 100000 and state.global_step % eval_interval == 0:
 
             is_ddp = (
                 torch.distributed.is_initialized()
@@ -319,8 +311,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=MODEL_SAVE_DIR,
-        logging_dir=params.LOGGING_DIR,
+        output_dir=str(MODEL_SAVE_DIR),
+        logging_dir=str(params.LOGGING_DIR),
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
@@ -331,7 +323,7 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
         logging_steps=2000,
         save_strategy="steps",
         save_steps=2000,
-        save_total_limit=5,
+        save_total_limit=15,
         load_best_model_at_end=False,
         eval_strategy="steps",
         # eval_strategy="no",

@@ -8,7 +8,8 @@ import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from multiprocessing import Process, set_start_method
 from tqdm import tqdm
-import config
+
+from LLM_INTERNALIZATION import config
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -127,7 +128,10 @@ def gen_embedding():
     movies_df = pd.read_parquet(str(file_name))
     
     n_gpus = torch.cuda.device_count()
-    df_splits = np.array_split(movies_df, n_gpus)
+    df_splits = [
+        movies_df.iloc[i::n_gpus].reset_index(drop=True)
+        for i in range(n_gpus)
+    ]
     
     out_prefix = str(os.path.join(config.PROCESSED_DATA_DIR, f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_llm_emb"))
 

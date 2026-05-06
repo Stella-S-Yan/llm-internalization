@@ -326,8 +326,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=MODEL_SAVE_DIR,
-        logging_dir=params.LOGGING_DIR,
+        output_dir=str(MODEL_SAVE_DIR),
+        logging_dir=str(params.LOGGING_DIR),
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,

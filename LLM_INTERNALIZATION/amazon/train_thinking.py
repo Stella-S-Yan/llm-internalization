@@ -1,14 +1,3 @@
-"""
-Phase 1 training for seq pred. Use aligned new embeddings; fix all embeddings; only tune LoRA parameter.
-
-Able to achieve 4.97% recall@5
-
-
-
-DDP using all GPUs available.
-# Using torchrun (PyTorch >=1.10)
-$ torchrun --nproc_per_node=8 train_seq_pred_aligned_phase1.py
-"""
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -47,9 +36,6 @@ class MergedReasoningDataset(Dataset):
         record = self.data[idx]
         if self.datatype == "sft":
             return {
-                # "input_ids": torch.tensor(record["input_ids"], dtype=torch.long),
-                # "labels": torch.tensor(record["labels"], dtype=torch.long)
-
                 "input_ids": record["input_ids"],
                 "labels": record["labels"],
                 "length": len(record["input_ids"])

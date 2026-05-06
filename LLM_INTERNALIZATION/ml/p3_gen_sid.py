@@ -1,13 +1,11 @@
 import logging
 import numpy as np
 import jax.numpy as jnp
-from utils import load_model
-from utils import format_sid
-import config
-from utils import bagz_utils
 import pandas as pd
 import os
 
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import load_model, format_sid, bagz_utils
 
 # --- Reset logging completely ---
 for handler in logging.root.handlers[:]:

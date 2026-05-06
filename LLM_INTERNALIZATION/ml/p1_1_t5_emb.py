@@ -4,9 +4,10 @@ import logging
 import psutil
 import multiprocessing
 from sentence_transformers import SentenceTransformer
-from utils import bagz_utils
-import config
 import pandas as pd
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

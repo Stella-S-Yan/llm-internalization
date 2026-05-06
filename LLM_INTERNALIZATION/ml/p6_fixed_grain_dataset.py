@@ -2,11 +2,10 @@
 Only do it for eval and test data. Training data are generated on the fly.
 """
 
-import config
-from utils import bagz_utils
 import random
 
-
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 def format_sid(seq):
     prefixes = ["A", "B", "C", "D"]

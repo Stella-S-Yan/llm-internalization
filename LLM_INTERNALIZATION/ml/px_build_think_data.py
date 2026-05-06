@@ -9,8 +9,6 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import multiprocessing as mp
-import config
-from utils import bagz_utils
 import bagz
 import json
 import re
@@ -19,7 +17,9 @@ from transformers import AutoTokenizer
 from collections import Counter
 from tqdm import tqdm
 import itertools
-import time
+
+from LLM_INTERNALIZATION import config
+from LLM_INTERNALIZATION.utils import bagz_utils
 
 # --- Global Templates ---
 PROMPT_TEMPLATE = """
