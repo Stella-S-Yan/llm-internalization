@@ -17,6 +17,15 @@ $ bash setup/setup_jax.sh
 # Run experiments
 
 1. Create a folder named `workspace` to store data and model outputs.
+2. Download datasets used in the paper and put them under `workspace/data`: 
+    - [Amazon Beauty](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html)
+    - [LePaRD 10K, 20K, 50K](https://huggingface.co/datasets/rmahari/LePaRD/tree/main):   We only need the `top_xxxx_data.csv` files. 
+    - [MovieLens 20M](https://grouplens.org/datasets/movielens/20m/)
+    - [MovieLens 1M](https://grouplens.org/datasets/movielens/1m/)
+
+    After extracting all files, the `workspace/data` directory should have the following structure:
+
+    <img src="image.png" width="300">
 2. Update `LLM_INTERNALIZATION/config.py` by setting the following parameters:
     ```python
     DATA_SOURCE
