@@ -9,8 +9,7 @@ print(whoami())
 
 api = HfApi()
 
-base = "/usr/local/google/home/stellasyan/Documents/workspace/processed_data"
-
+base = "/usr/local/google/home/stellasyan/Documents/workspace"
 
 # Upload model
 model_base = base + "/model"

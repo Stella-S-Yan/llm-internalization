@@ -2,9 +2,7 @@
 
 This repository contains the official implementation of:
 
-**When Machines Speak: A Unified Generative Framework for Integrating Machine-Native Symbols into Pretrained Large Language Models**
-
-[Yan et al., 2026](https://example.com)
+**When Machines Speak: A Unified Generative Framework for Integrating Machine-Native Symbols into Pretrained Large Language Models** ([Yan et al., 2026](https://example.com))
 
 # Setup environment
 
