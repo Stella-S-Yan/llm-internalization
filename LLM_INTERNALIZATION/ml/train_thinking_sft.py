@@ -311,8 +311,8 @@ def train(model, tokenizer, train_dataset, eval_dataset, gen_eval_dataset, param
 
     # --- Training arguments ---
     training_args = TrainingArguments(
-        output_dir=str(MODEL_SAVE_DIR),
-        logging_dir=str(params.LOGGING_DIR),
+        output_dir=MODEL_SAVE_DIR,
+        logging_dir=params.LOGGING_DIR,
         per_device_train_batch_size=params.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=params.ACC_STEP,
         max_steps=params.TOTAL_STEPS,
@@ -415,7 +415,7 @@ def main():
         setattr(Params, key, value)
 
     run_name = f"{config.REVIEW_TYPE}_{Params.LR}_weight_decay{Params.WEIGHT_DECAY}_bs{Params.TRAIN_BATCH_SIZE}_acc_step{Params.ACC_STEP}_warmup_{Params.WARMUP_STEPS}_lora_rank{Params.LORA_RANK}_lora_ratio{Params.LORA_RATIO}_lora_dropout{Params.LORA_DROPOUT}_total_steps{Params.TOTAL_STEPS}_{Params.RUN_NUM}"
-    Params.LOGGING_DIR =  config.RUN_DIR / "ML_train_think_pred" / run_name
+    Params.LOGGING_DIR =  config.RUN_DIR / f"{config.DATA_SOURCE}_{config.REVIEW_TYPE}_train_thinking_sft" / run_name
 
     print(f"!!! total_steps: {Params.TOTAL_STEPS}")
     print(vars(Params))
