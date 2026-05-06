@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ~/miniconda3/etc/profile.d/conda.sh
+
 conda create -n jax_exp python=3.11 -y
 source activate jax_exp
 

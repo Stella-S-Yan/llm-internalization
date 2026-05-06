@@ -15,11 +15,11 @@ PROCESSED_DATA_DIR = WORKSPACE_DIR / "processed_data"
 MODEL_DIR = WORKSPACE_DIR / "model"
 RUN_DIR = WORKSPACE_DIR / "runs"
 
-DATA_SOURCE = "MovieLens"
-REVIEW_TYPE = "1m"
+# DATA_SOURCE = "MovieLens"
+# REVIEW_TYPE = "1m"
 
-# DATA_SOURCE = "Lepard"
-# REVIEW_TYPE = "10k"
+DATA_SOURCE = "Lepard"
+REVIEW_TYPE = "20k"   # "10k", "20k", "50k"
 
 # DATA_SOURCE = "Amazon"
 # REVIEW_TYPE =  "Beauty"   
@@ -166,7 +166,7 @@ elif DATA_SOURCE == "Lepard":
         HP = {
             "training": {
                 "total_steps": 20_000, 
-                "warmup_steps": 2_000,
+                "warmup_steps": 3_000,
             },
             "learning_rate_schedule": {
                 "init_value": 0.0,

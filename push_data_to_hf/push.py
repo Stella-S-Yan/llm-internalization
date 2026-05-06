@@ -1,8 +1,9 @@
 import os
 from huggingface_hub import HfApi
 from huggingface_hub import login
+import fnmatch
 
-login(token="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")  #"hf_xxxxxx"
+login(token="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")  #"hf_xxxxxx"
  
 from huggingface_hub import whoami
 print(whoami())
@@ -11,44 +12,53 @@ api = HfApi()
 
 base = "/usr/local/google/home/stellasyan/Documents/workspace"
 
-# Upload model
-model_base = base + "/model"
-for root, dirs, files in os.walk(model_base):
-    for f in files:
-        if f.endswith(".tgz"):
-            local_path = os.path.join(root, f)
-            rel_path = os.path.relpath(local_path, base)
-
-            api.upload_file(
-                path_or_fileobj=local_path,
-                path_in_repo=f"model/{rel_path}",
-                repo_id="UsernameAlreadyExitsts/llm_internalization",
-                repo_type="dataset",
-                commit_message=f"Update {rel_path}",
-            )
-
-
-# # Upload processed_data
-# data_base = base + "/processed_data"
-# for root, dirs, files in os.walk(data_base):
+# # Upload model
+# model_base = base + "/model"
+# for root, dirs, files in os.walk(model_base):
 #     for f in files:
-#         if f.startswith("Amazon"):
+#         if f.endswith(".tgz") and not fnmatch.fnmatch(f, "*merged_think_sft_model_*.tgz"):
 #             local_path = os.path.join(root, f)
 #             rel_path = os.path.relpath(local_path, base)
 
+#             print(f)
+#             print("here")
 #             api.upload_file(
 #                 path_or_fileobj=local_path,
-#                 path_in_repo=f"processed_data/{rel_path}",
+#                 path_in_repo=f"model/{f}",
 #                 repo_id="UsernameAlreadyExitsts/llm_internalization",
 #                 repo_type="dataset",
 #                 commit_message=f"Update {rel_path}",
 #             )
 
-# # Upload a single file
-# api.upload_file(
-#     path_or_fileobj="/usr/local/google/home/stellasyan/Documents/workspace/model/Amazon_Beauty_think_sft_adaptor_0.tgz",
-#     path_in_repo="final_model/Amazon_Beauty_think_sft_adaptor_0.tgz",
-#     repo_id="UsernameAlreadyExitsts/llm_internalization",
-#     repo_type="dataset",
-#     commit_message="Uploading amazon models"
-# )
+
+# Upload processed_data
+data_base = base + "/processed_data"
+for root, dirs, files in os.walk(data_base):
+    for f in files:
+        if f.startswith("Lepard_10k"):  # "Amazon", "Lepard_10k"
+            local_path = os.path.join(root, f)
+            rel_path = os.path.relpath(local_path, base)
+
+            api.upload_file(
+                path_or_fileobj=local_path,
+                path_in_repo=f"processed_data/{f}",
+                repo_id="UsernameAlreadyExitsts/llm_internalization",
+                repo_type="dataset",
+                commit_message=f"Update {rel_path}",
+            )
+
+# Upload a final model
+model_base = base + "/model"
+for root, dirs, files in os.walk(model_base):
+    for f in files:
+        if fnmatch.fnmatch(f, "*merged_think_*.tgz"):
+            local_path = os.path.join(root, f)
+            rel_path = os.path.relpath(local_path, base)
+
+            api.upload_file(
+                path_or_fileobj=local_path,
+                path_in_repo=f"final_model/{f}",
+                repo_id="UsernameAlreadyExitsts/llm_internalization",
+                repo_type="dataset",
+                commit_message=f"Update {rel_path}",
+            )
