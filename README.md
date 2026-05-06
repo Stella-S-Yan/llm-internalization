@@ -56,7 +56,9 @@ $ bash setup/setup_jax.sh
         ```
 
 
-You can monitor training progress, including intermediate and final models, using TensorBoard. Training logs are stored in `workspace/runs/`.
+You can monitor training progress, including intermediate and final models, using TensorBoard. Training logs are stored in `workspace/runs/`. The following shows the training progress for LePaRD 10k dataset
+
+<img src="image-1.png" width="800">
 
 All intermediate data, models, and final checkpoints are available at [HuggingFace llm_internalization](https://huggingface.co/datasets/UsernameAlreadyExitsts/llm_internalization).
 

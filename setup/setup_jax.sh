@@ -10,6 +10,6 @@ pip install optax==0.2.4
 pip install tensorflow-cpu==2.20.0 
 
 pip install pandas==3.0.2 
-pip install pyarrow==22.0.0
+pip install pyarrow==24.0.0
 pip install matplotlib==3.10.9
-pip install bagz==0.2.0
+pip install bagz
