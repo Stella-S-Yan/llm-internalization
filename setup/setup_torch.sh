@@ -14,6 +14,7 @@ python -m pip install peft==0.19.1
 python -m pip install datasets==4.8.5
 
 python -m pip install tensorboard==2.20.0
+python -m pip install setuptools==80.9.0
 python -m pip install matplotlib==3.10.9
 python -m pip install pandas==3.0.2
 python -m pip install sentence-transformers==5.4.1
