@@ -134,8 +134,15 @@ def gen_embedding():
     quote_df = meta_df[["passage_id", "quote", "row_id"]].drop_duplicates(subset="passage_id", keep="first").reset_index(drop=True)
 
     n_gpus = torch.cuda.device_count()
-    dest_splits = np.array_split(meta_df, n_gpus)
-    quote_splits = np.array_split(quote_df, n_gpus)
+
+    dest_splits = [
+        meta_df.iloc[i::n_gpus].reset_index(drop=True)
+        for i in range(n_gpus)
+    ]
+    quote_splits = [
+        quote_df.iloc[i::n_gpus].reset_index(drop=True)
+        for i in range(n_gpus)
+    ]
 
     out_prefix = config.LEPARD_LLM_EMB
 
