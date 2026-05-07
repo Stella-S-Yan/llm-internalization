@@ -42,6 +42,10 @@ def run_preprocessing():
         assert merged_df.shape[0] == ratings_1m_df.shape[0]
         
     elif config.REVIEW_TYPE == "20m":
+        # 20m contains 16 titles that are duplicates, each appear twice. 
+        assert meta_df['Title'].value_counts().gt(1).sum() == 16
+        meta_df = meta_df.drop_duplicates(subset=['Title'], keep='first')
+
         movies_20m_file = os.path.join(config.DATA_DIR, config.DATA_SOURCE, f'ml-{config.REVIEW_TYPE}', 'movies.csv')
         movies_20m_df = pd.read_csv(movies_20m_file, engine='python', encoding='ISO-8859-1')
         movies_20m_df.columns = movies_column_names
