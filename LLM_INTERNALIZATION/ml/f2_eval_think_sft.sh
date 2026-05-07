@@ -15,7 +15,6 @@ echo "Starting run on GPU $GPU_INDEX"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 echo "RDZV_PORT=$RDZV_PORT"
 
-# export CUDA_VISIBLE_DEVICES=$GPU_INDEX
 torchrun \
   --nproc_per_node=7 \
   --rdzv_endpoint=localhost:$RDZV_PORT \
