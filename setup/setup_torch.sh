@@ -10,7 +10,7 @@ echo "Current env: $CONDA_DEFAULT_ENV"
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 python -m pip install transformers==4.57.3
-python -m pip install peft==0.19.1
+python -m pip install peft==0.18.0
 python -m pip install datasets==4.8.5
 
 python -m pip install tensorboard==2.20.0
