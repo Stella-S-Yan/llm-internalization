@@ -16,10 +16,10 @@ MODEL_DIR = WORKSPACE_DIR / "model"
 RUN_DIR = WORKSPACE_DIR / "runs"
 
 # DATA_SOURCE = "MovieLens"
-# REVIEW_TYPE = "1m"
+# REVIEW_TYPE = "1m" # "20m"
 
 DATA_SOURCE = "Lepard"
-REVIEW_TYPE = "20k"   # "10k", "20k", "50k"
+REVIEW_TYPE = "50k"   # "10k", "20k", "50k"
 
 # DATA_SOURCE = "Amazon"
 # REVIEW_TYPE =  "Beauty"   
@@ -180,11 +180,34 @@ elif DATA_SOURCE == "Lepard":
             "vqvae": {
                 "num_embeddings": 256,
                 "embedding_dim": 16,
-                "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-                "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
+                "ema_decay": 0.99,          
+                "commitment_cost": 0.1,     
             }
         }
         CODEBOOK_PCT = 0.95
+    elif REVIEW_TYPE == "50k": 
+        HP = {
+            "training": {
+                "total_steps": 20_000, 
+                "warmup_steps": 2_000,
+            },
+            "learning_rate_schedule": {
+                "init_value": 0.0,
+                "peak_value": 1e-3,  
+                "end_value": 1e-5,
+            },
+            "optimizer": {
+                "type": "adamw",  
+                "weight_decay": 0.055,
+            },
+            "vqvae": {
+                "num_embeddings": 256,
+                "embedding_dim": 16,
+                "ema_decay": 0.99,          
+                "commitment_cost": 0.1,     
+            }
+        }
+        CODEBOOK_PCT = 0.9
     elif REVIEW_TYPE == "10k":
         HP = {
             "training": {
@@ -203,8 +226,8 @@ elif DATA_SOURCE == "Lepard":
             "vqvae": {
                 "num_embeddings": 256,
                 "embedding_dim": 16,
-                "ema_decay": 0.99,          # lower value makes code book adaptation faster, can cause instability, so training takes longer to converge
-                "commitment_cost": 0.1,     # Increase commitment_cost will depress quant_loss
+                "ema_decay": 0.99,          
+                "commitment_cost": 0.1,     
             }
         }
         CODEBOOK_PCT = 0.92

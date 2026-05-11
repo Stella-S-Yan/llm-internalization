@@ -5,7 +5,7 @@ from huggingface_hub import HfApi
 from huggingface_hub import login
 import fnmatch
 
-login(token="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")  #"hf_xxxxxx"
+login(token="hf_xxxxxx")
  
 from huggingface_hub import whoami
 print(whoami())
@@ -21,9 +21,6 @@ for root, dirs, files in os.walk(model_base):
         if f.endswith(".tgz") and not fnmatch.fnmatch(f, "*merged_think_sft_model_*.tgz"):
             local_path = os.path.join(root, f)
             rel_path = os.path.relpath(local_path, base)
-
-            print(f)
-            print("here")
             api.upload_file(
                 path_or_fileobj=local_path,
                 path_in_repo=f"model/{f}",
@@ -39,7 +36,6 @@ for root, dirs, files in os.walk(data_base):
     for f in files:
         local_path = os.path.join(root, f)
         rel_path = os.path.relpath(local_path, base)
-
         api.upload_file(
             path_or_fileobj=local_path,
             path_in_repo=f"processed_data/{f}",
@@ -56,7 +52,6 @@ for root, dirs, files in os.walk(model_base):
         if fnmatch.fnmatch(f, "*merged_think_*.tgz"):
             local_path = os.path.join(root, f)
             rel_path = os.path.relpath(local_path, base)
-
             api.upload_file(
                 path_or_fileobj=local_path,
                 path_in_repo=f"final_model/{f}",
