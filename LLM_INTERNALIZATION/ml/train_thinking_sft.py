@@ -115,7 +115,7 @@ def evaluate_sequence_recall(
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
         batch_size = len(prompts)
-        prompt_len = inputs["input_ids"].size(1)
+        prompt_lens = inputs["attention_mask"].sum(dim=1)
 
         # Beam search
         # outputs = model.module.generate(
@@ -135,10 +135,10 @@ def evaluate_sequence_recall(
         for i in range(batch_size):
             # --- CREATE UNIQUE ID ---
             unique_id = solutions[i]["uid"]
-
+            cur_prompt_len = prompt_lens[i].item()
             generations = [
                 tokenizer.decode(
-                    outputs[i, k, prompt_len:],
+                    outputs[i, k, cur_prompt_len:],
                     skip_special_tokens=True
                 )
                 for k in range(num_return_sequences)
