@@ -66,10 +66,14 @@ All intermediate data, models, and final checkpoints are available at [HuggingFa
 # Reference
 Please cite the following paper if you use llm-internalization in your work.
 ```
-@inproceedings{
-    title = "",
-    author = "Su Yan, Rakesh Iyer",
-    year = "2026",
+@misc{yan2026machinesspeakunifiedgenerative,
+      title={When Machines Speak: A Unified Generative Framework for Integrating Machine-Native Symbols into Pretrained Large Language Models}, 
+      author={Su Yan and Rakesh Iyer},
+      year={2026},
+      eprint={2608.19529},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2608.19529}, 
 }
 ```
 
